@@ -1,0 +1,4 @@
+poke-env==0.16.1
+stable-baselines3==2.9.0
+torch==2.14.0
+

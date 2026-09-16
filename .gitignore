@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Fly connectome source data (large, local-only files)
+connections_princeton.csv
+connections_princeton.csv.gz
+neurons.csv
+neurons.csv.gz
+
+# Training artifacts
+models/
+logs/
+
