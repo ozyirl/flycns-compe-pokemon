@@ -1,4 +1,6 @@
 poke-env==0.16.1
 stable-baselines3==2.9.0
 torch==2.14.0
-
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
