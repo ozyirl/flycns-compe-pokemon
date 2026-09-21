@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Fly CNS Atlas — visualization only</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MALECNS v1.0 · VISUALIZATION ONLY</p>
+        <h1>Fly CNS Atlas</h1>
+      </div>
+      <div class="header-actions">
+        <span id="datasetSummary" class="dataset-summary">Loading selected graph…</span>
+        <a id="openExternal" class="button secondary" target="_blank" rel="noreferrer">Open full Neuroglancer ↗</a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar" aria-label="Fly CNS controls">
+        <section>
+          <label class="label" for="search">Find neuron or cell type</label>
+          <div class="search-row">
+            <input id="search" type="search" placeholder="KCg-m, PAM04, DNp01, root ID…" autocomplete="off" />
+            <button id="clearSearch" class="icon-button" title="Clear search" aria-label="Clear search">×</button>
+          </div>
+          <div class="search-actions">
+            <span id="matchCount">Type to search 4,274 cells</span>
+            <button id="showMatches" class="text-button" hidden>Highlight all matches</button>
+          </div>
+          <div id="results" class="results" aria-live="polite"></div>
+        </section>
+
+        <section>
+          <div class="section-heading">
+            <h2>Populations</h2>
+            <button id="toggleAll" class="text-button">Hide all</button>
+          </div>
+          <div id="populationToggles" class="population-list"></div>
+        </section>
+
+        <section>
+          <h2>Reference layers</h2>
+          <label class="switch-row"><input id="brainToggle" type="checkbox" checked /><span>Brain + VNC outline</span></label>
+          <label class="switch-row"><input id="neuropilToggle" type="checkbox" /><span>Neuropil regions</span></label>
+          <label class="switch-row"><input id="emToggle" type="checkbox" /><span>EM imagery</span></label>
+          <label class="switch-row" title="Streams v1.0 point annotations for the selected neuron(s)">
+            <input id="synapseToggle" type="checkbox" /><span>Synapse points</span><small>selection only</small>
+          </label>
+        </section>
+
+        <section>
+          <h2>Connection highlight</h2>
+          <label class="switch-row"><input id="incomingToggle" type="checkbox" checked /><span class="incoming-dot"></span><span>Incoming partners</span></label>
+          <label class="switch-row"><input id="outgoingToggle" type="checkbox" checked /><span class="outgoing-dot"></span><span>Outgoing partners</span></label>
+          <p class="hint">Select a result to recolor its connected neuron morphologies. Synapse counts and neuropils appear below.</p>
+        </section>
+
+        <section id="selectionPanel" class="selection-panel empty">
+          <div class="section-heading">
+            <h2>Selection</h2>
+            <button id="clearSelection" class="text-button" hidden>Clear</button>
+          </div>
+          <div id="selectionContent" class="muted">No neuron selected.</div>
+          <div id="connections" class="connections"></div>
+        </section>
+      </aside>
+
+      <section class="viewer-shell" aria-label="Interactive 3D morphology viewer">
+        <div class="viewer-toolbar">
+          <div class="legend" id="legend"></div>
+          <div class="viewer-actions">
+            <span id="sceneStatus">Preparing scene…</span>
+            <button id="reloadScene" class="button">Reload 3D scene</button>
+          </div>
+        </div>
+        <div class="viewer-frame-wrap">
+          <iframe id="neuroglancer" title="MaleCNS morphology in Neuroglancer" allow="fullscreen; clipboard-write"></iframe>
+          <div id="viewerLoading" class="viewer-loading">
+            <div class="spinner"></div>
+            <strong>Loading public MaleCNS morphology</strong>
+            <span>4,274 meshes can take a moment. Search for one cell for a lighter view.</span>
+          </div>
+        </div>
+        <footer class="viewer-footer">
+          <span>Drag to rotate · scroll to zoom · middle-drag to pan · click a mesh for Neuroglancer details</span>
+          <span>Remote morphology/EM is streamed from public scientific data sources.</span>
+        </footer>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
