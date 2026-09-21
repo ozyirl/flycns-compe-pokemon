@@ -1,0 +1,219 @@
+{
+  "neurons": 4274,
+  "edges": 10097,
+  "synapses": 163861,
+  "populations": {
+    "descending": 512,
+    "modulatory": 251,
+    "central": 1978,
+    "sensory": 509,
+    "kenyon": 1024
+  },
+  "neurotransmitters": {
+    "ACH": 1859,
+    "OCT": 28,
+    "GABA": 391,
+    "GLUT": 466,
+    "SER": 127,
+    "DA": 1125,
+    "UNKNOWN": 243,
+    "HIST": 35
+  },
+  "modeled_receptor_edges": {
+    "nicotinic acetylcholine": 4154,
+    "octopamine": 302,
+    "GABA-A-like chloride": 1139,
+    "glutamate-gated chloride": 898,
+    "serotonin": 282,
+    "dopamine": 3251,
+    "unassigned": 64,
+    "histamine-gated chloride": 7
+  },
+  "top_cell_types": {
+    "sensory": [
+      {
+        "name": "R1-R6",
+        "count": 61
+      },
+      {
+        "name": "BM_InOm",
+        "count": 16
+      },
+      {
+        "name": "R8y",
+        "count": 10
+      },
+      {
+        "name": "TmY14",
+        "count": 9
+      },
+      {
+        "name": "R8_unclear",
+        "count": 9
+      },
+      {
+        "name": "unknown_sensory",
+        "count": 9
+      },
+      {
+        "name": "SNta02",
+        "count": 9
+      },
+      {
+        "name": "LC17",
+        "count": 8
+      }
+    ],
+    "kenyon": [
+      {
+        "name": "KCg-m",
+        "count": 324
+      },
+      {
+        "name": "KCab-m",
+        "count": 185
+      },
+      {
+        "name": "KCab-s",
+        "count": 181
+      },
+      {
+        "name": "KCab-c",
+        "count": 113
+      },
+      {
+        "name": "KCab-ap2",
+        "count": 78
+      },
+      {
+        "name": "KCg-d",
+        "count": 53
+      },
+      {
+        "name": "KCab-ap1",
+        "count": 46
+      },
+      {
+        "name": "KCab-p",
+        "count": 42
+      }
+    ],
+    "modulatory": [
+      {
+        "name": "PAM08",
+        "count": 16
+      },
+      {
+        "name": "PAM01",
+        "count": 14
+      },
+      {
+        "name": "PAM04",
+        "count": 11
+      },
+      {
+        "name": "PAM02",
+        "count": 10
+      },
+      {
+        "name": "hDeltaK",
+        "count": 8
+      },
+      {
+        "name": "PAM06",
+        "count": 8
+      },
+      {
+        "name": "untyped",
+        "count": 7
+      },
+      {
+        "name": "PFGs",
+        "count": 7
+      }
+    ],
+    "central": [
+      {
+        "name": "Tm2",
+        "count": 41
+      },
+      {
+        "name": "L2",
+        "count": 40
+      },
+      {
+        "name": "T5a",
+        "count": 34
+      },
+      {
+        "name": "Tm3",
+        "count": 32
+      },
+      {
+        "name": "C3",
+        "count": 31
+      },
+      {
+        "name": "L1",
+        "count": 31
+      },
+      {
+        "name": "T4d",
+        "count": 30
+      },
+      {
+        "name": "T3",
+        "count": 29
+      }
+    ],
+    "descending": [
+      {
+        "name": "DNg08",
+        "count": 11
+      },
+      {
+        "name": "DNpe008",
+        "count": 11
+      },
+      {
+        "name": "DNg106",
+        "count": 6
+      },
+      {
+        "name": "DNge094",
+        "count": 6
+      },
+      {
+        "name": "DNp17",
+        "count": 6
+      },
+      {
+        "name": "DNg12_b",
+        "count": 6
+      },
+      {
+        "name": "DNge091",
+        "count": 5
+      },
+      {
+        "name": "DNg07",
+        "count": 5
+      }
+    ]
+  },
+  "config": {
+    "sensory_neurons": 512,
+    "kenyon_neurons": 1024,
+    "modulatory_neurons": 256,
+    "central_neurons": 2048,
+    "descending_neurons": 512,
+    "seed": 0,
+    "propagation_steps": 3,
+    "leak": 0.5
+  },
+  "provenance": {
+    "cell_identity": "Janelia MaleCNS v1.0 neuron annotations",
+    "connectivity": "Janelia MaleCNS v1.0 synapse counts",
+    "receptors": "modeled assumptions; not measured by the source CSVs"
+  }
+}

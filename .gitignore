@@ -12,4 +12,6 @@ neurons.csv.gz
 # Training artifacts
 models/
 logs/
-
+artifacts/*.npz
+artifacts/*.json.gz
+telemetry/
