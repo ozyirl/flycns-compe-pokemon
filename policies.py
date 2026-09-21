@@ -13,6 +13,14 @@ from stable_baselines3.common.policies import MultiInputActorCriticPolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.type_aliases import PyTorchObs
 
+from flycns.model import FlyConnectomeFeaturesExtractor
+
+__all__ = (
+    "BaselineFeaturesExtractor",
+    "FlyConnectomeFeaturesExtractor",
+    "MaskedActorCriticPolicy",
+)
+
 
 class BaselineFeaturesExtractor(BaseFeaturesExtractor):
     """Plain MLP baseline; a fly network can later implement this same contract."""
@@ -93,4 +101,3 @@ class MaskedActorCriticPolicy(MultiInputActorCriticPolicy):
     def get_distribution(self, observation: PyTorchObs) -> Distribution:
         latent_pi, _ = self._latents(observation)
         return self._distribution(latent_pi, observation)
-
