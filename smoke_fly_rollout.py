@@ -36,9 +36,13 @@ class RolloutResult:
 
 
 def run_one_battle(
-    environment: Any, policy: FlyCNSPPOPolicy, *, seed: int = 7
+    environment: Any,
+    policy: FlyCNSPPOPolicy,
+    *,
+    seed: int = 7,
+    deterministic: bool = False,
 ) -> RolloutResult:
-    """Collect one complete episode from the existing Gymnasium environment."""
+    """Collect one episode, optionally choosing the highest-scoring legal action."""
 
     original_weights = [
         parameter.detach().clone() for parameter in policy.actor_critic.parameters()
@@ -52,7 +56,11 @@ def run_one_battle(
         while not done:
             observation = np.asarray(state["observation"], dtype=np.float32).copy()
             action_mask = np.asarray(state["action_mask"], dtype=np.int8).copy()
-            decision = policy.sample_action(observation, action_mask)
+            decision = (
+                policy.predict(observation, action_mask, deterministic=True)
+                if deterministic
+                else policy.sample_action(observation, action_mask)
+            )
             action = decision.selected_action_index
             if not 0 <= action < action_mask.size or action_mask[action] != 1:
                 illegal_action_attempted = True

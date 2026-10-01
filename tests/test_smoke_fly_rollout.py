@@ -46,8 +46,18 @@ class FakeEnvironment:
 class FakePolicy:
     def __init__(self) -> None:
         self.actor_critic = torch.nn.Linear(1, 1)
+        self.sample_calls = 0
+        self.deterministic_calls = 0
 
     def sample_action(self, observation: np.ndarray, action_mask: np.ndarray) -> PolicyDecision:
+        self.sample_calls += 1
+        return PolicyDecision(7, -0.5, 0.25, tuple([float("-inf")] * ACTION_COUNT))
+
+    def predict(
+        self, observation: np.ndarray, action_mask: np.ndarray, *, deterministic: bool
+    ) -> PolicyDecision:
+        assert deterministic
+        self.deterministic_calls += 1
         return PolicyDecision(7, -0.5, 0.25, tuple([float("-inf")] * ACTION_COUNT))
 
 
@@ -60,6 +70,8 @@ class FlyRolloutSmokeTest(unittest.TestCase):
 
         self.assertEqual(environment.reset_calls, 1)
         self.assertEqual(environment.step_calls, 2)
+        self.assertEqual(policy.sample_calls, 2)
+        self.assertEqual(policy.deterministic_calls, 0)
         self.assertTrue(environment.closed)
         self.assertEqual(len(result.turns), 2)
         self.assertEqual(result.total_reward, 3.0)
@@ -74,6 +86,17 @@ class FlyRolloutSmokeTest(unittest.TestCase):
         self.assertEqual(result.turns[0].state_value, 0.25)
         self.assertEqual(result.turns[0].reward, 1.5)
         self.assertEqual(result.turns[0].observation[0], 0.0)
+
+    def test_deterministic_rollout_never_samples(self) -> None:
+        environment = FakeEnvironment()
+        policy = FakePolicy()
+
+        result = run_one_battle(environment, policy, deterministic=True)
+
+        self.assertEqual(len(result.turns), 2)
+        self.assertEqual(policy.deterministic_calls, 2)
+        self.assertEqual(policy.sample_calls, 0)
+        self.assertTrue(result.actor_critic_weights_unchanged)
 
 
 if __name__ == "__main__":
