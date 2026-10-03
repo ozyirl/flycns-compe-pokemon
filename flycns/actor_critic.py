@@ -12,20 +12,25 @@ from flycns.action_decoder import ACTION_COUNT
 from flycns.trainable_decoder import DESCENDING_ACTIVITY_SIZE, TrainableActionDecoder
 
 
-WEIGHTS_FORMAT_VERSION = 1
+# Version 1 heads were evaluated on raw counts; version 2 uses fixed normalization.
+WEIGHTS_FORMAT_VERSION = 2
 
 
 class FlyCNSActorCritic(nn.Module):
-    """Return action logits and a state value from 512 descending values."""
+    """Normalize fixed spike features before the trainable policy and value heads."""
 
     def __init__(self) -> None:
         super().__init__()
+        self.input_normalization = nn.LayerNorm(
+            DESCENDING_ACTIVITY_SIZE, eps=1e-5, elementwise_affine=False
+        )
         self.policy_head = TrainableActionDecoder()
         self.value_head = nn.Linear(DESCENDING_ACTIVITY_SIZE, 1)
 
     def forward(self, descending_activity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        policy_logits = self.policy_head(descending_activity)
-        state_value = self.value_head(descending_activity)
+        normalized_activity = self.input_normalization(descending_activity)
+        policy_logits = self.policy_head(normalized_activity)
+        state_value = self.value_head(normalized_activity)
         return policy_logits, state_value
 
     def save_weights(self, path: str | Path) -> None:
