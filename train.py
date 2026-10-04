@@ -20,7 +20,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timesteps", type=int, default=100_000)
     parser.add_argument("--output", type=Path, default=Path("models/baseline"))
-    parser.add_argument("--opponent", choices=("random", "max-power"), default="random")
+    parser.add_argument("--opponent", choices=("random", "max-power", "fly"), default="random")
+    parser.add_argument(
+        "--fly-checkpoint",
+        type=Path,
+        help="trained FlyCNSActorCritic checkpoint when --opponent fly is selected",
+    )
     parser.add_argument("--battle-format", default=DEFAULT_BATTLE_FORMAT)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -35,7 +40,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    env = Monitor(make_env(opponent=args.opponent, battle_format=args.battle_format))
+    env = Monitor(
+        make_env(
+            opponent=args.opponent,
+            battle_format=args.battle_format,
+            fly_checkpoint=args.fly_checkpoint,
+        )
+    )
     try:
         if args.architecture == "fly":
             extractor_class = FlyConnectomeFeaturesExtractor

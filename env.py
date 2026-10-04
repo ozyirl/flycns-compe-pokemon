@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -44,9 +45,24 @@ class ShowdownEnv(SinglesEnv):
         )
 
 
-def make_opponent(kind: str, battle_format: str = DEFAULT_BATTLE_FORMAT) -> Player:
+def make_opponent(
+    kind: str,
+    battle_format: str = DEFAULT_BATTLE_FORMAT,
+    *,
+    fly_checkpoint: str | Path | None = None,
+) -> Player:
     """Build the scripted opponent used by the single-agent wrapper."""
 
+    if kind == "fly":
+        if fly_checkpoint is None:
+            raise ValueError("Fly CNS opponent requires fly_checkpoint")
+        from flycns.player import FlyCNSPlayer
+
+        return FlyCNSPlayer(
+            checkpoint_path=fly_checkpoint,
+            battle_format=battle_format,
+            start_listening=False,
+        )
     opponents: dict[str, type[Player]] = {
         "random": RandomPlayer,
         "max-power": MaxBasePowerPlayer,
@@ -63,12 +79,14 @@ def make_env(
     *,
     opponent: str = "random",
     battle_format: str = DEFAULT_BATTLE_FORMAT,
+    fly_checkpoint: str | Path | None = None,
 ) -> SingleAgentWrapper:
     """Create the Gymnasium environment consumed by Stable-Baselines3."""
 
     parallel_env = ShowdownEnv(battle_format=battle_format)
     return SingleAgentWrapper(
         parallel_env,
-        make_opponent(opponent, battle_format=battle_format),
+        make_opponent(
+            opponent, battle_format=battle_format, fly_checkpoint=fly_checkpoint
+        ),
     )
-
