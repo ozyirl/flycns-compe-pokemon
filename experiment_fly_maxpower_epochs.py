@@ -23,7 +23,7 @@ from experiment_fly_maxpower_batched import BATCH_BATTLES, CHECKPOINT_INTERVAL, 
 from experiment_fly_maxpower_sweep import EVALUATION_BATTLES, evaluate_checkpoint
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.ppo_policy import FlyCNSPPOPolicy
-from smoke_fly_ppo_update import advantages_and_returns, update_once
+from smoke_fly_ppo_update import advantages_and_returns, normalized_policy_advantages, update_once
 from smoke_fly_rollout import RolloutResult, run_one_battle
 
 
@@ -46,6 +46,9 @@ class OptimizerStep:
     total_loss: float
     advantage_mean: float
     advantage_std: float
+    normalized_advantage_mean: float
+    normalized_advantage_std: float
+    advantage_normalized_for_policy: bool
     clip_fraction: float
     approximate_kl: float
 
@@ -64,6 +67,9 @@ class CheckpointSnapshot:
     policy_loss: float
     advantage_mean: float
     advantage_std: float
+    normalized_advantage_mean: float
+    normalized_advantage_std: float
+    advantage_normalized_for_policy: bool
     clip_fraction: float
     approximate_kl: float
 
@@ -112,6 +118,7 @@ def train_multi_epoch(
     *,
     output_dir: Path,
     seed: int,
+    normalize_advantages: bool = False,
 ) -> tuple[tuple[OptimizerStep, ...], tuple[CheckpointSnapshot, ...]]:
     """Collect 8 complete battles, then apply 8 unchanged full-batch PPO steps."""
 
@@ -123,6 +130,7 @@ def train_multi_epoch(
     checkpoints: list[CheckpointSnapshot] = []
     window_steps: list[OptimizerStep] = []
     window_advantages: list[np.ndarray] = []
+    window_normalized_advantages: list[np.ndarray] = []
     updated_through = 0
 
     for index in range(TRAINING_BATTLES):
@@ -131,10 +139,14 @@ def train_multi_epoch(
         if len(pending) == BATCH_BATTLES or completed == TRAINING_BATTLES:
             combined = combine_rollouts(tuple(pending))
             advantages, _ = advantages_and_returns(combined)
+            normalized_advantages = normalized_policy_advantages(advantages)
             advantage_mean = float(np.mean(advantages))
             advantage_std = float(np.std(advantages))
             for epoch in range(1, EPOCHS_PER_BATCH + 1):
-                result = update_once(policy, combined)
+                result = (
+                    update_once(policy, combined, normalize_advantages=True)
+                    if normalize_advantages else update_once(policy, combined)
+                )
                 if not result.actor_changed or not result.critic_changed or not result.fly_output_unchanged:
                     raise AssertionError("PPO epoch violated heads-only/Fly CNS invariants")
                 clip_fraction, approximate_kl = policy_shift_metrics(policy, combined)
@@ -149,12 +161,16 @@ def train_multi_epoch(
                     total_loss=result.total_loss,
                     advantage_mean=advantage_mean,
                     advantage_std=advantage_std,
+                    normalized_advantage_mean=float(np.mean(normalized_advantages)),
+                    normalized_advantage_std=float(np.std(normalized_advantages)),
+                    advantage_normalized_for_policy=normalize_advantages,
                     clip_fraction=clip_fraction,
                     approximate_kl=approximate_kl,
                 )
                 all_steps.append(step)
                 window_steps.append(step)
             window_advantages.append(advantages)
+            window_normalized_advantages.append(normalized_advantages)
             updated_through = completed
             print(
                 f"battles {completed - len(pending) + 1}-{completed}: "
@@ -172,6 +188,7 @@ def train_multi_epoch(
                 raise FileExistsError(f"Refusing to overwrite checkpoint: {checkpoint}")
             policy.actor_critic.save_weights(checkpoint)
             combined_advantages = np.concatenate(window_advantages)
+            combined_normalized_advantages = np.concatenate(window_normalized_advantages)
             snapshot = CheckpointSnapshot(
                 after_battle=completed,
                 updated_through_battle=updated_through,
@@ -185,12 +202,16 @@ def train_multi_epoch(
                 policy_loss=_transition_weighted_mean(window_steps, "policy_loss"),
                 advantage_mean=float(np.mean(combined_advantages)),
                 advantage_std=float(np.std(combined_advantages)),
+                normalized_advantage_mean=float(np.mean(combined_normalized_advantages)),
+                normalized_advantage_std=float(np.std(combined_normalized_advantages)),
+                advantage_normalized_for_policy=normalize_advantages,
                 clip_fraction=_transition_weighted_mean(window_steps, "clip_fraction"),
                 approximate_kl=_transition_weighted_mean(window_steps, "approximate_kl"),
             )
             checkpoints.append(snapshot)
             window_steps.clear()
             window_advantages.clear()
+            window_normalized_advantages.clear()
             print(
                 f"saved {checkpoint.name}: {len(all_steps)} optimizer steps, "
                 f"updated through battle {updated_through}, {len(pending)} rollouts pending",

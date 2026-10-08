@@ -28,6 +28,20 @@ class PPOUpdateResult:
     fly_output_unchanged: bool
 
 
+ADVANTAGE_NORMALIZATION_EPSILON = 1e-8
+
+
+def normalized_policy_advantages(advantages: np.ndarray) -> np.ndarray:
+    """Normalize only the policy-loss copy of a collected rollout batch."""
+
+    raw = np.asarray(advantages, dtype=np.float32)
+    if raw.ndim != 1 or not raw.size or not np.isfinite(raw).all():
+        raise ValueError("Advantages must be a nonempty finite vector")
+    mean = float(np.mean(raw, dtype=np.float64))
+    std = float(np.std(raw, dtype=np.float64))
+    return ((raw.astype(np.float64) - mean) / (std + ADVANTAGE_NORMALIZATION_EPSILON)).astype(np.float32)
+
+
 def advantages_and_returns(
     rollout: RolloutResult, *, gamma: float = 0.99, gae_lambda: float = 0.95
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -62,6 +76,7 @@ def update_once(
     clip_range: float = 0.2,
     value_coefficient: float = 0.5,
     entropy_coefficient: float = 0.01,
+    normalize_advantages: bool = False,
 ) -> PPOUpdateResult:
     """Make one PPO optimizer step on the actor and critic heads only."""
 
@@ -96,7 +111,10 @@ def update_once(
     legal = torch.as_tensor(masks, device=device, dtype=torch.bool)
     selected = torch.as_tensor(actions, device=device, dtype=torch.long)
     old_log_probs = torch.as_tensor(old_log_probabilities, device=device, dtype=dtype)
-    advantage_tensor = torch.as_tensor(advantages, device=device, dtype=dtype)
+    policy_advantages = (
+        normalized_policy_advantages(advantages) if normalize_advantages else advantages
+    )
+    advantage_tensor = torch.as_tensor(policy_advantages, device=device, dtype=dtype)
     return_tensor = torch.as_tensor(returns, device=device, dtype=dtype)
 
     actor_parameters = tuple(model.policy_head.parameters())

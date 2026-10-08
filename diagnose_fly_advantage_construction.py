@@ -60,19 +60,18 @@ class AdvantageBattle:
 
 
 def advantages_normalized_before_policy_loss() -> bool:
-    """Report the current update_once implementation, failing if its path drifts."""
+    """Report the default PPO update mode, failing if its path drifts."""
+    if inspect.signature(update_once).parameters["normalize_advantages"].default is not False:
+        raise RuntimeError("Default PPO advantage-normalization mode changed")
     source = inspect.getsource(update_once)
     expected = (
-        "advantage_tensor = torch.as_tensor(advantages",
+        "normalized_policy_advantages(advantages) if normalize_advantages else advantages",
+        "advantage_tensor = torch.as_tensor(policy_advantages",
         "ratio * advantage_tensor",
         "ratio.clamp(1.0 - clip_range, 1.0 + clip_range) * advantage_tensor",
     )
     if any(fragment not in source for fragment in expected):
         raise RuntimeError("PPO advantage path changed; inspect normalization before reporting")
-    if any(fragment in source for fragment in (
-        "advantage_tensor.mean()", "advantage_tensor.std()", "advantages.mean()", "advantages.std()"
-    )):
-        raise RuntimeError("PPO advantage normalization may have changed; inspect update_once")
     return False
 
 
@@ -212,7 +211,7 @@ def main() -> None:
         "battles": len(frozen), "outcomes": dict(outcomes),
         "gamma": GAMMA, "gae_lambda": GAE_LAMBDA,
         "advantages_normalized_before_policy_loss": normalized,
-        "normalization_note": "update_once uses the raw GAE tensor directly in the clipped policy loss",
+        "normalization_note": "update_once defaults to raw GAE; normalization is opt-in",
         "representative_turns": {
             event: asdict(turn) if turn is not None else None
             for event, turn in examples.items()
