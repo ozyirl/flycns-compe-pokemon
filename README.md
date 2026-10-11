@@ -69,3 +69,18 @@ Remote scientific layers:
   `precomputed://gs://flyem-male-cns/v1.0/segmentation`
 - MaleCNS CLAHE EM imagery: `precomputed://gs://flyem-male-cns/em/em-clahe-jpeg`
 - Brain/VNC shells, neuropils, and synapses from the official MaleCNS Neuroglancer scene
+
+## Frozen-representation supervised probe
+
+With a local Showdown server running, collect MaxBasePowerPlayer decisions against
+RandomPlayer and fit a fresh linear classifier to the frozen 512 descending spike
+counts (no PPO or checkpoint updates):
+
+```bash
+.venv/bin/python probe_fly_supervised.py --battles 50
+```
+
+If Showdown is on another port, pass `--server-url ws://localhost:8001/showdown/websocket`.
+Each run creates a new ignored `models/fly_supervised_probe_*` directory containing
+the raw 186-value observations, 26-value legal masks and chosen action indices,
+the 512-value features, battle-level train/test indices, and accuracy metrics.
