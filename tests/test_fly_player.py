@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import torch
 from poke_env.environment import SinglesEnv
-from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer
+from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer, SimpleHeuristicsPlayer
 
 from encoding import OBSERVATION_DIM
 from env import DEFAULT_BATTLE_FORMAT, make_opponent
@@ -90,6 +90,7 @@ class FlyCNSPlayerTest(unittest.TestCase):
         self.assertEqual(player.checkpoint_path, self.checkpoint)
         self.assertIsInstance(make_opponent("random"), RandomPlayer)
         self.assertIsInstance(make_opponent("max-power"), MaxBasePowerPlayer)
+        self.assertIsInstance(make_opponent("heuristics"), SimpleHeuristicsPlayer)
         with self.assertRaisesRegex(ValueError, "requires fly_checkpoint"):
             make_opponent("fly")
 

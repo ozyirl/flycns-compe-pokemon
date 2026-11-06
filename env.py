@@ -9,7 +9,7 @@ import numpy as np
 from gymnasium import spaces
 from poke_env.battle import Battle
 from poke_env.environment import SingleAgentWrapper, SinglesEnv
-from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer
+from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer, SimpleHeuristicsPlayer
 
 from encoding import OBSERVATION_DIM, embed_battle
 
@@ -66,6 +66,7 @@ def make_opponent(
     opponents: dict[str, type[Player]] = {
         "random": RandomPlayer,
         "max-power": MaxBasePowerPlayer,
+        "heuristics": SimpleHeuristicsPlayer,
     }
     try:
         opponent_class = opponents[kind]
