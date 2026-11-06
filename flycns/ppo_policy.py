@@ -85,13 +85,15 @@ class FlyCNSPPOPolicy:
         deterministic: bool = True,
     ) -> PolicyDecision:
         mask = self._validated_masks(action_mask, (ACTION_COUNT,))
-        descending = self._descending_activity(np.asarray(observation, dtype=np.float32))
+        observation_array = np.asarray(observation, dtype=np.float32)
+        descending = self._descending_activity(observation_array)
 
         parameter = next(self.actor_critic.parameters())
         activity = torch.from_numpy(descending).to(device=parameter.device, dtype=parameter.dtype)
+        raw_observation = torch.from_numpy(observation_array).to(device=parameter.device, dtype=parameter.dtype)
         legal = torch.as_tensor(mask, device=parameter.device, dtype=torch.bool)
         with torch.inference_mode():
-            raw_logits, value = self.actor_critic(activity)
+            raw_logits, value = self.actor_critic(activity, raw_observation)
             masked_logits = raw_logits.masked_fill(~legal, float("-inf"))
             distribution = Categorical(logits=masked_logits)
             action = torch.argmax(masked_logits) if deterministic else distribution.sample()
@@ -144,10 +146,11 @@ class FlyCNSPPOPolicy:
         )
         parameter = next(self.actor_critic.parameters())
         activity = torch.from_numpy(descending).to(device=parameter.device, dtype=parameter.dtype)
+        raw_observations = torch.from_numpy(observation_array).to(device=parameter.device, dtype=parameter.dtype)
         legal = torch.as_tensor(masks, device=parameter.device, dtype=torch.bool)
         selected = torch.as_tensor(actions, device=parameter.device, dtype=torch.long)
         with torch.inference_mode():
-            raw_logits, values = self.actor_critic(activity)
+            raw_logits, values = self.actor_critic(activity, raw_observations)
             masked_logits = raw_logits.masked_fill(~legal, float("-inf"))
             distribution = Categorical(logits=masked_logits)
             log_probabilities = distribution.log_prob(selected)

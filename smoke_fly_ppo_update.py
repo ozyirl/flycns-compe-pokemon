@@ -108,6 +108,7 @@ def update_once(
     parameter = next(model.parameters())
     device, dtype = parameter.device, parameter.dtype
     activity = torch.as_tensor(descending, device=device, dtype=dtype)
+    raw_observations = torch.as_tensor(observations, device=device, dtype=dtype)
     legal = torch.as_tensor(masks, device=device, dtype=torch.bool)
     selected = torch.as_tensor(actions, device=device, dtype=torch.long)
     old_log_probs = torch.as_tensor(old_log_probabilities, device=device, dtype=dtype)
@@ -125,7 +126,7 @@ def update_once(
         [*actor_parameters, *critic_parameters], lr=learning_rate
     )
     optimizer.zero_grad(set_to_none=True)
-    logits, values = model(activity)
+    logits, values = model(activity, raw_observations)
     distribution = Categorical(logits=logits.masked_fill(~legal, float("-inf")))
     new_log_probs = distribution.log_prob(selected)
     ratio = torch.exp(new_log_probs - old_log_probs)

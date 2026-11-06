@@ -27,7 +27,10 @@ class FlyCNSActorCritic(nn.Module):
         self.policy_head = TrainableActionDecoder()
         self.value_head = nn.Linear(DESCENDING_ACTIVITY_SIZE, 1)
 
-    def forward(self, descending_activity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, descending_activity: torch.Tensor, observation: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # ``observation`` is accepted for interface parity with the hybrid model and ignored.
         normalized_activity = self.input_normalization(descending_activity)
         policy_logits = self.policy_head(normalized_activity)
         state_value = self.value_head(normalized_activity)
