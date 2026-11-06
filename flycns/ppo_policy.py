@@ -14,6 +14,7 @@ from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.graph import FlyGraph
+from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic
 from flycns.stimulation import BattleSensoryAdapter, FlySpikeSimulator
 
 
@@ -47,7 +48,7 @@ class FlyCNSPPOPolicy:
         self,
         *,
         graph_path: str | Path = DEFAULT_GRAPH_PATH,
-        actor_critic: FlyCNSActorCritic | None = None,
+        actor_critic: FlyCNSActorCritic | FlyCNSHybridActorCritic | None = None,
     ) -> None:
         graph = FlyGraph.load(graph_path)
         self.adapter = BattleSensoryAdapter(graph)

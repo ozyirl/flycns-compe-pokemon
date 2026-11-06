@@ -12,12 +12,12 @@ from poke_env.player import Player
 from poke_env.player.battle_order import BattleOrder
 
 from encoding import embed_battle
-from flycns.actor_critic import FlyCNSActorCritic
+from flycns.hybrid_actor_critic import load_actor_critic
 from flycns.ppo_policy import FlyCNSPPOPolicy
 
 
 class FlyCNSPlayer(Player):
-    """Choose legal Showdown orders with frozen Fly CNS actor-critic heads."""
+    """Choose legal Showdown orders with frozen Fly-only or hybrid actor-critic heads."""
 
     def __init__(
         self,
@@ -29,7 +29,7 @@ class FlyCNSPlayer(Player):
         self.checkpoint_path = Path(checkpoint_path).expanduser()
         if not self.checkpoint_path.is_file():
             raise FileNotFoundError(f"Fly CNS checkpoint not found: {self.checkpoint_path}")
-        actor_critic = FlyCNSActorCritic.load_weights(self.checkpoint_path)
+        actor_critic = load_actor_critic(self.checkpoint_path)
         actor_critic.eval()
         actor_critic.requires_grad_(False)
         self.policy = FlyCNSPPOPolicy(actor_critic=actor_critic)
