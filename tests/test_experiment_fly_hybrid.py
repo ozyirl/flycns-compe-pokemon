@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -23,6 +25,26 @@ class ExperimentFlyHybridTest(unittest.TestCase):
     def test_make_model_rejects_unknown_arm(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown arm"):
             make_model("mlp", None)  # type: ignore[arg-type]
+
+    def test_make_model_continues_hybrid_and_widens_fly_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fly_path = Path(directory) / "fly.pt"
+            hybrid_path = Path(directory) / "hybrid.pt"
+            _seeded_fly().save_weights(fly_path)
+            hybrid = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
+            with torch.no_grad():
+                hybrid.policy_head.move_scorer.weight.fill_(0.5)
+            hybrid.save_weights(hybrid_path)
+
+            self.assertIsInstance(make_model("fly", fly_path), FlyCNSActorCritic)
+            self.assertIsInstance(make_model("hybrid", fly_path), FlyCNSHybridActorCritic)
+            continued = make_model("hybrid", hybrid_path)
+            with self.assertRaisesRegex(ValueError, "hybrid checkpoint"):
+                make_model("fly", hybrid_path)
+
+        torch.testing.assert_close(
+            continued.policy_head.move_scorer.weight, hybrid.policy_head.move_scorer.weight
+        )
 
     def test_optimizer_gives_raw_parameters_their_own_learning_rate(self) -> None:
         model = FlyCNSHybridActorCritic()

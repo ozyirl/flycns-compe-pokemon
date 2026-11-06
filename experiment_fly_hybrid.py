@@ -1,8 +1,9 @@
-"""Compare Fly-only and hybrid heads under identical PPO, both warm-started from v1.
+"""Compare Fly-only and hybrid heads under identical PPO from a shared starting checkpoint.
 
 The hybrid adds zero-initialized scorers that read each switch/move slot's raw
-features beside the fixed Fly CNS activity, so both arms start from exactly the
-v1 policy. Unlike ``update_once``, one Adam optimizer persists across steps.
+features beside the fixed Fly CNS activity, so a Fly-only start (v1 by default)
+gives both arms the same initial policy; a hybrid start continues that model.
+Unlike ``update_once``, one Adam optimizer persists across steps.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from env import DEFAULT_BATTLE_FORMAT, ShowdownEnv, make_opponent
 from experiment_fly_maxpower import DEFAULT_V1, sha256
 from experiment_fly_maxpower_batched import BATCH_BATTLES, combine_rollouts
 from flycns.actor_critic import FlyCNSActorCritic
-from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic
+from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic, load_actor_critic
 from flycns.ppo_policy import FlyCNSPPOPolicy
 from smoke_fly_ppo_update import advantages_and_returns, normalized_policy_advantages
 from smoke_fly_rollout import RolloutResult, run_one_battle
@@ -67,10 +68,16 @@ class CheckpointEvaluation:
     fly_illegal_actions: int
 
 
-def make_model(arm: str, v1: Path) -> FlyCNSActorCritic | FlyCNSHybridActorCritic:
+def make_model(arm: str, checkpoint: Path) -> FlyCNSActorCritic | FlyCNSHybridActorCritic:
+    """Load the starting heads; a Fly-only source is widened for the hybrid arm."""
+
     if arm not in ARMS:
         raise ValueError(f"Unknown arm {arm!r}; expected one of {ARMS}")
-    source = FlyCNSActorCritic.load_weights(v1)
+    source = load_actor_critic(checkpoint)
+    if isinstance(source, FlyCNSHybridActorCritic):
+        if arm == "fly":
+            raise ValueError("The fly arm cannot start from a hybrid checkpoint")
+        return source
     return source if arm == "fly" else FlyCNSHybridActorCritic.from_fly(source)
 
 
@@ -204,13 +211,13 @@ def evaluate(
 def run(args: argparse.Namespace) -> dict[str, object]:
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=False)
-    v1_hash = sha256(args.v1_checkpoint)
+    init_hash = sha256(args.init_checkpoint)
     server = ServerConfiguration(args.server_url, LocalhostServerConfiguration.authentication_url)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-    model = make_model(args.arm, args.v1_checkpoint)
+    model = make_model(args.arm, args.init_checkpoint)
     model.eval()
     policy = FlyCNSPPOPolicy(actor_critic=model)
     optimizer = make_optimizer(
@@ -258,14 +265,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 f"{row.wins}/{row.battles} ({row.win_rate:.0%})",
                 flush=True,
             )
-    if sha256(args.v1_checkpoint) != v1_hash:
-        raise AssertionError("v1 checkpoint changed during the experiment")
+    if sha256(args.init_checkpoint) != init_hash:
+        raise AssertionError("Starting checkpoint changed during the experiment")
 
     report: dict[str, object] = {
         "arm": args.arm,
         "seed": args.seed,
-        "v1_checkpoint": str(args.v1_checkpoint),
-        "v1_sha256": v1_hash,
+        "init_checkpoint": str(args.init_checkpoint),
+        "init_sha256": init_hash,
         "training_opponent": args.training_opponent,
         "training_battles": args.training_battles,
         "batch_battles": BATCH_BATTLES,
@@ -299,7 +306,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--v1-checkpoint", type=Path, default=DEFAULT_V1)
+    parser.add_argument(
+        "--init-checkpoint", "--v1-checkpoint", dest="init_checkpoint", type=Path, default=DEFAULT_V1,
+        help="starting heads: a Fly-only (e.g. v1) or hybrid checkpoint; never modified",
+    )
     parser.add_argument("--training-opponent", default="max-power")
     parser.add_argument("--training-battles", type=int, default=300)
     parser.add_argument("--checkpoint-interval", type=int, default=100)
