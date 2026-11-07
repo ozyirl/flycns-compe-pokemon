@@ -11,11 +11,15 @@ from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import (
+    ACTIVE_FEATURES_OFFSET,
+    CONTEXT_SIZE,
     MOVE_FEATURE_SIZE,
     MOVE_FEATURES_OFFSET,
     SWITCH_FEATURE_SIZE,
     SWITCH_FEATURES_OFFSET,
+    FlyCNSContextualActorCritic,
     FlyCNSHybridActorCritic,
+    battle_context,
     load_actor_critic,
 )
 from flycns.ppo_policy import FlyCNSPPOPolicy
@@ -120,6 +124,73 @@ class FlyCNSHybridActorCriticTest(unittest.TestCase):
 
         self.assertIn(decision.selected_action_index, (1, 6, 7))
         self.assertTrue(np.isfinite(decision.state_value))
+
+
+class FlyCNSContextualActorCriticTest(unittest.TestCase):
+    def _trained_hybrid(self) -> FlyCNSHybridActorCritic:
+        hybrid = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
+        with torch.no_grad():
+            hybrid.policy_head.move_scorer.weight.fill_(0.3)
+            hybrid.value_head.raw.weight.fill_(0.01)
+        return hybrid
+
+    def test_warm_start_reproduces_hybrid_outputs(self) -> None:
+        hybrid = self._trained_hybrid()
+        contextual = FlyCNSContextualActorCritic.from_hybrid(hybrid)
+        activity, observation = _inputs()
+
+        for actual, expected in zip(contextual(activity, observation), hybrid(activity, observation), strict=True):
+            torch.testing.assert_close(actual, expected)
+
+    def test_from_hybrid_rejects_other_families(self) -> None:
+        with self.assertRaises(TypeError):
+            FlyCNSContextualActorCritic.from_hybrid(FlyCNSContextualActorCritic())
+
+    def test_context_collects_globals_both_actives_and_active_hp(self) -> None:
+        observation = torch.zeros(OBSERVATION_DIM)
+        observation[SWITCH_FEATURES_OFFSET + 2 * SWITCH_FEATURE_SIZE + 1] = 1.0  # Own slot 2 active.
+        observation[SWITCH_FEATURES_OFFSET + 2 * SWITCH_FEATURE_SIZE + 2] = 0.4  # Its HP.
+        opponent_slot = SWITCH_FEATURES_OFFSET + (6 + 1) * SWITCH_FEATURE_SIZE
+        observation[opponent_slot + 1] = 1.0
+        observation[opponent_slot + 2] = 0.9
+        observation[ACTIVE_FEATURES_OFFSET] = 0.5
+
+        context = battle_context(observation)
+
+        self.assertEqual(context.shape, (CONTEXT_SIZE,))
+        torch.testing.assert_close(context[-2:], torch.tensor([0.4, 0.9]))
+        self.assertEqual(context[16].item(), 0.5)
+
+    def test_trained_context_changes_scores_with_battle_state(self) -> None:
+        contextual = FlyCNSContextualActorCritic.from_hybrid(self._trained_hybrid())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            torch.nn.init.normal_(contextual.policy_head.move_context[-1].weight)
+        activity, observation = _inputs(1)
+        changed = observation.clone()
+        changed[0, ACTIVE_FEATURES_OFFSET:MOVE_FEATURES_OFFSET] = 0.0  # Same moves, other matchup.
+
+        before, _ = contextual(activity, observation)
+        after, _ = contextual(activity, changed)
+
+        self.assertFalse(torch.allclose(before[0, 6:10], after[0, 6:10]))
+
+    def test_parameter_groups_partition_and_round_trip(self) -> None:
+        contextual = FlyCNSContextualActorCritic.from_hybrid(self._trained_hybrid())
+        raw = {id(item) for item in contextual.raw_parameters()}
+        fly = {id(item) for item in contextual.fly_parameters()}
+        self.assertFalse(raw & fly)
+        self.assertEqual(raw | fly, {id(item) for item in contextual.parameters()})
+        activity, observation = _inputs()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contextual.pt"
+            contextual.save_weights(path)
+            loaded = load_actor_critic(path)
+            with self.assertRaisesRegex(ValueError, "metadata"):
+                FlyCNSHybridActorCritic.load_weights(path)
+
+        self.assertIsInstance(loaded, FlyCNSContextualActorCritic)
+        torch.testing.assert_close(loaded(activity, observation), contextual(activity, observation))
 
 
 if __name__ == "__main__":

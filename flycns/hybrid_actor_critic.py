@@ -9,9 +9,11 @@ import torch
 from torch import nn
 
 from encoding import (
+    ACTIVE_FEATURES,
     GLOBAL_FEATURES,
     MOVES_PER_POKEMON,
     OBSERVATION_DIM,
+    TEAM_FEATURES,
     TEAM_SIZE,
 )
 from flycns.action_decoder import ACTION_COUNT
@@ -185,12 +187,118 @@ class FlyCNSHybridActorCritic(nn.Module):
         return model
 
 
+CONTEXT_ARCHITECTURE = "fly-hybrid-context"
+CONTEXT_WEIGHTS_FORMAT_VERSION = 1
+CONTEXT_HIDDEN_SIZE = 32
+VALUE_HIDDEN_SIZE = 64
+ACTIVE_FEATURES_OFFSET = SWITCH_FEATURES_OFFSET + TEAM_FEATURES
+TEAM_SLOT_ACTIVE, TEAM_SLOT_HP = 1, 2
+# Global flags, both active Pokemon (boosts, base stats, types), and both active HPs.
+CONTEXT_SIZE = GLOBAL_FEATURES + ACTIVE_FEATURES + 2
+
+
+def battle_context(observation: torch.Tensor) -> torch.Tensor:
+    """Per-decision state that should modulate every slot's score."""
+
+    teams = observation[..., SWITCH_FEATURES_OFFSET:ACTIVE_FEATURES_OFFSET].unflatten(
+        -1, (2, TEAM_SIZE, SWITCH_FEATURE_SIZE)
+    )
+    active_hp = (teams[..., TEAM_SLOT_ACTIVE] * teams[..., TEAM_SLOT_HP]).sum(dim=-1)
+    return torch.cat([
+        observation[..., :GLOBAL_FEATURES],
+        observation[..., ACTIVE_FEATURES_OFFSET:ACTIVE_FEATURES_OFFSET + ACTIVE_FEATURES],
+        active_hp,
+    ], dim=-1)
+
+
+def _residual_mlp(input_size: int, hidden_size: int) -> nn.Sequential:
+    """Small MLP whose zeroed output layer makes it a no-op until trained."""
+
+    mlp = nn.Sequential(nn.Linear(input_size, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1))
+    nn.init.zeros_(mlp[-1].weight)
+    nn.init.zeros_(mlp[-1].bias)
+    return mlp
+
+
+class ContextualPolicyHead(HybridPolicyHead):
+    """Hybrid slot scores plus MLP corrections that see each slot beside the battle context."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.move_context = _residual_mlp(MOVE_FEATURE_SIZE + CONTEXT_SIZE, CONTEXT_HIDDEN_SIZE)
+        self.switch_context = _residual_mlp(SWITCH_FEATURE_SIZE + CONTEXT_SIZE, CONTEXT_HIDDEN_SIZE)
+
+    def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        context = battle_context(observation)
+        moves = observation[..., MOVE_FEATURES_OFFSET:].unflatten(-1, (MOVES_PER_POKEMON, MOVE_FEATURE_SIZE))
+        switches = observation[
+            ..., SWITCH_FEATURES_OFFSET:SWITCH_FEATURES_OFFSET + SWITCH_ACTIONS * SWITCH_FEATURE_SIZE
+        ].unflatten(-1, (SWITCH_ACTIONS, SWITCH_FEATURE_SIZE))
+
+        def with_context(slots: torch.Tensor) -> torch.Tensor:
+            return torch.cat([slots, context.unsqueeze(-2).expand(*slots.shape[:-1], CONTEXT_SIZE)], dim=-1)
+
+        move_scores = self.move_context(with_context(moves)).squeeze(-1)
+        switch_scores = self.switch_context(with_context(switches)).squeeze(-1)
+        corrections = torch.cat([switch_scores, move_scores.tile((MOVE_ACTION_GROUPS,))], dim=-1)
+        return super().forward(normalized_activity, observation) + corrections
+
+    def raw_parameters(self) -> list[nn.Parameter]:
+        return [*super().raw_parameters(), *self.move_context.parameters(), *self.switch_context.parameters()]
+
+
+class ContextualValueHead(HybridValueHead):
+    """Hybrid linear value plus a residual MLP over the raw observation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.raw_mlp = _residual_mlp(OBSERVATION_DIM, VALUE_HIDDEN_SIZE)
+
+    def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        return super().forward(normalized_activity, observation) + self.raw_mlp(observation)
+
+    def raw_parameters(self) -> list[nn.Parameter]:
+        return [*super().raw_parameters(), *self.raw_mlp.parameters()]
+
+
+class FlyCNSContextualActorCritic(FlyCNSHybridActorCritic):
+    """Hybrid actor-critic whose slot scores and value also depend on battle context."""
+
+    architecture = CONTEXT_ARCHITECTURE
+    format_version = CONTEXT_WEIGHTS_FORMAT_VERSION
+
+    def _make_policy_head(self) -> ContextualPolicyHead:
+        return ContextualPolicyHead()
+
+    def _make_value_head(self) -> ContextualValueHead:
+        return ContextualValueHead()
+
+    @classmethod
+    def from_hybrid(cls, source: FlyCNSHybridActorCritic) -> "FlyCNSContextualActorCritic":
+        """Copy every hybrid weight; zeroed MLP outputs keep the outputs initially identical."""
+
+        if type(source) is not FlyCNSHybridActorCritic:
+            raise TypeError("from_hybrid expects a plain hybrid actor-critic")
+        model = cls()
+        missing, unexpected = model.load_state_dict(source.state_dict(), strict=False)
+        if unexpected or any(not key.split(".")[1].endswith(("context", "mlp")) for key in missing):
+            raise ValueError(f"Unexpected hybrid weights: missing={missing}, unexpected={unexpected}")
+        return model
+
+
+_ARCHITECTURES: dict[str, type[FlyCNSHybridActorCritic]] = {
+    ARCHITECTURE: FlyCNSHybridActorCritic,
+    CONTEXT_ARCHITECTURE: FlyCNSContextualActorCritic,
+}
+
+
 def load_actor_critic(
     path: str | Path, *, map_location: str | torch.device = "cpu"
 ) -> FlyCNSActorCritic | FlyCNSHybridActorCritic:
-    """Load either checkpoint family, dispatching on the saved architecture tag."""
+    """Load any checkpoint family, dispatching on the saved architecture tag."""
 
     payload = torch.load(Path(path), map_location=map_location, weights_only=True)
-    if isinstance(payload, dict) and payload.get("architecture") == ARCHITECTURE:
-        return FlyCNSHybridActorCritic.load_weights(path, map_location=map_location)
+    architecture = payload.get("architecture") if isinstance(payload, dict) else None
+    if architecture in _ARCHITECTURES:
+        return _ARCHITECTURES[architecture].load_weights(path, map_location=map_location)
     return FlyCNSActorCritic.load_weights(path, map_location=map_location)
