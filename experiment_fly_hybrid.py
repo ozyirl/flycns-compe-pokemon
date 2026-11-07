@@ -235,9 +235,26 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         model, learning_rate=args.learning_rate, raw_learning_rate=args.raw_learning_rate
     )
 
-    pending: list[RolloutResult] = []
     batches: list[BatchStats] = []
-    checkpoints: list[tuple[int, Path]] = []
+    evaluations: list[CheckpointEvaluation] = []
+    report: dict[str, object] = {
+        "arm": args.arm,
+        "seed": args.seed,
+        "init_checkpoint": str(args.init_checkpoint),
+        "init_sha256": init_hash,
+        "training_opponent": args.training_opponent,
+        "training_battles": args.training_battles,
+        "batch_battles": BATCH_BATTLES,
+        "epochs_per_batch": EPOCHS_PER_BATCH,
+        "learning_rate": args.learning_rate,
+        "raw_learning_rate": args.raw_learning_rate if args.arm != "fly" else None,
+        "evaluation_seed": args.eval_seed,
+        "complete": False,
+        "batches": batches,
+        "evaluations": evaluations,
+    }
+
+    pending: list[RolloutResult] = []
     for index in range(args.training_battles):
         completed = index + 1
         pending.append(run_one_battle(
@@ -261,41 +278,71 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             if checkpoint.exists():
                 raise FileExistsError(f"Refusing to overwrite checkpoint: {checkpoint}")
             model.save_weights(checkpoint)
-            checkpoints.append((completed, checkpoint))
+            # Evaluate now so an interrupted run still leaves usable, saved results.
+            evaluations.extend(evaluate_checkpoint(checkpoint, completed, server, args, label=args.arm))
+            write_report(output_dir, report)
 
-    evaluations: list[CheckpointEvaluation] = []
-    for after_battle, checkpoint in checkpoints:
-        for opponent in args.eval_opponents:
-            row = evaluate(
-                checkpoint, server, opponent=opponent, battles=args.eval_battles,
-                seed=args.eval_seed, after_battle=after_battle,
-            )
-            evaluations.append(row)
-            print(
-                f"[{args.arm} seed {args.seed}] battle {after_battle} vs {opponent}: "
-                f"{row.wins}/{row.battles} ({row.win_rate:.0%})",
-                flush=True,
-            )
     if sha256(args.init_checkpoint) != init_hash:
         raise AssertionError("Starting checkpoint changed during the experiment")
-
-    report: dict[str, object] = {
-        "arm": args.arm,
-        "seed": args.seed,
-        "init_checkpoint": str(args.init_checkpoint),
-        "init_sha256": init_hash,
-        "training_opponent": args.training_opponent,
-        "training_battles": args.training_battles,
-        "batch_battles": BATCH_BATTLES,
-        "epochs_per_batch": EPOCHS_PER_BATCH,
-        "learning_rate": args.learning_rate,
-        "raw_learning_rate": args.raw_learning_rate if args.arm != "fly" else None,
-        "evaluation_seed": args.eval_seed,
-        "batches": [asdict(row) for row in batches],
-        "evaluations": [asdict(row) for row in evaluations],
-    }
-    (output_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report["complete"] = True
+    write_report(output_dir, report)
     return report
+
+
+def evaluate_checkpoint(
+    checkpoint: Path, after_battle: int, server: ServerConfiguration, args: argparse.Namespace, *, label: str
+) -> list[CheckpointEvaluation]:
+    rows = []
+    for opponent in args.eval_opponents:
+        row = evaluate(
+            checkpoint, server, opponent=opponent, battles=args.eval_battles,
+            seed=args.eval_seed, after_battle=after_battle,
+        )
+        rows.append(row)
+        print(f"[{label}] battle {after_battle} vs {opponent}: {row.wins}/{row.battles} ({row.win_rate:.0%})", flush=True)
+    return rows
+
+
+def write_report(output_dir: Path, report: dict[str, object]) -> None:
+    """Rewrite results.json atomically so readers never see a half-written file."""
+
+    serializable = {
+        key: [asdict(row) for row in value] if key in ("batches", "evaluations") else value
+        for key, value in report.items()
+    }
+    temporary = output_dir / "results.json.tmp"
+    temporary.write_text(json.dumps(serializable, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(output_dir / "results.json")
+
+
+def evaluate_directory(args: argparse.Namespace) -> None:
+    """Evaluate every saved checkpoint of an interrupted run, without training."""
+
+    directory: Path = args.evaluate_dir
+    checkpoints = sorted(directory.glob("battle_*.pt"))
+    if not checkpoints:
+        raise FileNotFoundError(f"No battle_*.pt checkpoints in {directory}")
+    if (directory / "results.json").exists():
+        raise FileExistsError(f"Refusing to overwrite {directory / 'results.json'}")
+    server = ServerConfiguration(args.server_url, LocalhostServerConfiguration.authentication_url)
+    model = load_actor_critic(checkpoints[0])
+    arm = {FlyCNSActorCritic: "fly", FlyCNSHybridActorCritic: "hybrid", FlyCNSContextualActorCritic: "contextual"}[
+        type(model)
+    ]
+    evaluations: list[CheckpointEvaluation] = []
+    report: dict[str, object] = {
+        "arm": arm,
+        "evaluated_existing": str(directory),
+        "evaluation_seed": args.eval_seed,
+        "complete": False,
+        "evaluations": evaluations,
+    }
+    for checkpoint in checkpoints:
+        after_battle = int(checkpoint.stem.removeprefix("battle_"))
+        evaluations.extend(evaluate_checkpoint(checkpoint, after_battle, server, args, label=str(directory)))
+        write_report(directory, report)
+    report["complete"] = True
+    write_report(directory, report)
 
 
 def summarize(directories: list[Path]) -> None:
@@ -331,14 +378,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-opponents", nargs="+", default=["max-power"])
     parser.add_argument("--output-dir", type=Path, help="new directory for checkpoints and results.json")
     parser.add_argument("--summarize", type=Path, nargs="+", help="print pooled results of finished runs")
+    parser.add_argument("--evaluate-dir", type=Path, help="evaluate an interrupted run's saved checkpoints")
     parser.add_argument(
         "--server-url",
         default=LocalhostServerConfiguration.websocket_url,
         help="WebSocket URL of the local Pokémon Showdown server",
     )
     args = parser.parse_args()
-    if args.summarize is None and (args.arm is None or args.output_dir is None):
-        parser.error("--arm and --output-dir are required unless --summarize is given")
+    if args.summarize is None and args.evaluate_dir is None and (args.arm is None or args.output_dir is None):
+        parser.error("--arm and --output-dir are required unless --summarize or --evaluate-dir is given")
     return args
 
 
@@ -346,8 +394,10 @@ def main() -> None:
     args = parse_args()
     if args.summarize is not None:
         summarize(args.summarize)
-        return
-    run(args)
+    elif args.evaluate_dir is not None:
+        evaluate_directory(args)
+    else:
+        run(args)
 
 
 if __name__ == "__main__":

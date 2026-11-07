@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ import numpy as np
 import torch
 
 from encoding import OBSERVATION_DIM
-from experiment_fly_hybrid import make_model, make_optimizer, ppo_epochs
+from experiment_fly_hybrid import BatchStats, make_model, make_optimizer, ppo_epochs, write_report
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import FlyCNSContextualActorCritic, FlyCNSHybridActorCritic
@@ -85,6 +86,20 @@ class ExperimentFlyHybridTest(unittest.TestCase):
         ))
         self.assertEqual(len(optimizer.state), len(list(model.parameters())))
 
+    def test_write_report_serializes_rows_and_replaces_previous_file(self) -> None:
+        batches = [BatchStats(8, 120, 3, 0.1, 2.0, 1.2, 0.05, 0.01)]
+        report = {"arm": "contextual", "complete": False, "batches": batches, "evaluations": []}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            write_report(output, report)
+            report["complete"] = True
+            write_report(output, report)
+            saved = json.loads((output / "results.json").read_text(encoding="utf-8"))
+            leftovers = list(output.glob("*.tmp"))
+
+        self.assertTrue(saved["complete"])
+        self.assertEqual(saved["batches"][0]["wins"], 3)
+        self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":
