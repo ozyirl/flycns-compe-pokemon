@@ -11,7 +11,7 @@ from encoding import OBSERVATION_DIM
 from experiment_fly_hybrid import make_model, make_optimizer, ppo_epochs
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
-from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic
+from flycns.hybrid_actor_critic import FlyCNSContextualActorCritic, FlyCNSHybridActorCritic
 from flycns.ppo_policy import FlyCNSPPOPolicy
 from smoke_fly_rollout import RolloutResult, TurnRecord
 
@@ -39,8 +39,11 @@ class ExperimentFlyHybridTest(unittest.TestCase):
             self.assertIsInstance(make_model("fly", fly_path), FlyCNSActorCritic)
             self.assertIsInstance(make_model("hybrid", fly_path), FlyCNSHybridActorCritic)
             continued = make_model("hybrid", hybrid_path)
-            with self.assertRaisesRegex(ValueError, "hybrid checkpoint"):
+            with self.assertRaisesRegex(ValueError, "FlyCNSHybridActorCritic checkpoint"):
                 make_model("fly", hybrid_path)
+            contextual = make_model("contextual", hybrid_path)
+            self.assertIsInstance(contextual, FlyCNSContextualActorCritic)
+            self.assertIsInstance(make_model("contextual", fly_path), FlyCNSContextualActorCritic)
 
         torch.testing.assert_close(
             continued.policy_head.move_scorer.weight, hybrid.policy_head.move_scorer.weight

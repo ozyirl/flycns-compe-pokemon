@@ -26,13 +26,17 @@ from env import DEFAULT_BATTLE_FORMAT, ShowdownEnv, make_opponent
 from experiment_fly_maxpower import DEFAULT_V1, sha256
 from experiment_fly_maxpower_batched import BATCH_BATTLES, combine_rollouts
 from flycns.actor_critic import FlyCNSActorCritic
-from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic, load_actor_critic
+from flycns.hybrid_actor_critic import (
+    FlyCNSContextualActorCritic,
+    FlyCNSHybridActorCritic,
+    load_actor_critic,
+)
 from flycns.ppo_policy import FlyCNSPPOPolicy
 from smoke_fly_ppo_update import advantages_and_returns, normalized_policy_advantages
 from smoke_fly_rollout import RolloutResult, run_one_battle
 
 
-ARMS = ("fly", "hybrid")
+ARMS = ("fly", "hybrid", "contextual")
 EPOCHS_PER_BATCH = 8
 CLIP_RANGE = 0.2
 VALUE_COEFFICIENT = 0.5
@@ -69,16 +73,23 @@ class CheckpointEvaluation:
 
 
 def make_model(arm: str, checkpoint: Path) -> FlyCNSActorCritic | FlyCNSHybridActorCritic:
-    """Load the starting heads; a Fly-only source is widened for the hybrid arm."""
+    """Load the starting heads, widening a simpler source to the arm's architecture.
+
+    Widening is output-preserving: fly -> hybrid -> contextual each add zeroed pathways.
+    """
 
     if arm not in ARMS:
         raise ValueError(f"Unknown arm {arm!r}; expected one of {ARMS}")
     source = load_actor_critic(checkpoint)
-    if isinstance(source, FlyCNSHybridActorCritic):
-        if arm == "fly":
-            raise ValueError("The fly arm cannot start from a hybrid checkpoint")
-        return source
-    return source if arm == "fly" else FlyCNSHybridActorCritic.from_fly(source)
+    rank = {FlyCNSActorCritic: 0, FlyCNSHybridActorCritic: 1, FlyCNSContextualActorCritic: 2}
+    target = ARMS.index(arm)
+    if rank[type(source)] > target:
+        raise ValueError(f"The {arm} arm cannot start from a {type(source).__name__} checkpoint")
+    if rank[type(source)] == 0 and target > 0:
+        source = FlyCNSHybridActorCritic.from_fly(source)
+    if rank[type(source)] == 1 and target > 1:
+        source = FlyCNSContextualActorCritic.from_hybrid(source)
+    return source
 
 
 def make_optimizer(
