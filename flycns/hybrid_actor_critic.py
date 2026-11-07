@@ -100,13 +100,22 @@ class HybridValueHead(nn.Module):
 class FlyCNSHybridActorCritic(nn.Module):
     """Same Fly pathway as :class:`FlyCNSActorCritic`, with raw slot features beside it."""
 
+    architecture = ARCHITECTURE
+    format_version = WEIGHTS_FORMAT_VERSION
+
     def __init__(self) -> None:
         super().__init__()
         self.input_normalization = nn.LayerNorm(
             DESCENDING_ACTIVITY_SIZE, eps=1e-5, elementwise_affine=False
         )
-        self.policy_head = HybridPolicyHead()
-        self.value_head = HybridValueHead()
+        self.policy_head = self._make_policy_head()
+        self.value_head = self._make_value_head()
+
+    def _make_policy_head(self) -> HybridPolicyHead:
+        return HybridPolicyHead()
+
+    def _make_value_head(self) -> HybridValueHead:
+        return HybridValueHead()
 
     def forward(
         self, descending_activity: torch.Tensor, observation: torch.Tensor | None = None
@@ -140,8 +149,8 @@ class FlyCNSHybridActorCritic(nn.Module):
     def save_weights(self, path: str | Path) -> None:
         torch.save(
             {
-                "architecture": ARCHITECTURE,
-                "format_version": WEIGHTS_FORMAT_VERSION,
+                "architecture": self.architecture,
+                "format_version": self.format_version,
                 "descending_activity_size": DESCENDING_ACTIVITY_SIZE,
                 "observation_size": OBSERVATION_DIM,
                 "action_count": ACTION_COUNT,
@@ -156,8 +165,8 @@ class FlyCNSHybridActorCritic(nn.Module):
     ) -> "FlyCNSHybridActorCritic":
         payload: dict[str, Any] = torch.load(Path(path), map_location=map_location, weights_only=True)
         expected_metadata = {
-            "architecture": ARCHITECTURE,
-            "format_version": WEIGHTS_FORMAT_VERSION,
+            "architecture": cls.architecture,
+            "format_version": cls.format_version,
             "descending_activity_size": DESCENDING_ACTIVITY_SIZE,
             "observation_size": OBSERVATION_DIM,
             "action_count": ACTION_COUNT,
