@@ -289,7 +289,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "batch_battles": BATCH_BATTLES,
         "epochs_per_batch": EPOCHS_PER_BATCH,
         "learning_rate": args.learning_rate,
-        "raw_learning_rate": args.raw_learning_rate if args.arm == "hybrid" else None,
+        "raw_learning_rate": args.raw_learning_rate if args.arm != "fly" else None,
         "evaluation_seed": args.eval_seed,
         "batches": [asdict(row) for row in batches],
         "evaluations": [asdict(row) for row in evaluations],
@@ -308,9 +308,9 @@ def summarize(directories: list[Path]) -> None:
             key = (report["arm"], row["after_battle"], row["opponent"])
             wins, battles = pooled.get(key, [0, 0])
             pooled[key] = [wins + row["wins"], battles + row["battles"]]
-    print(f"{'arm':<7} {'after':>6} {'opponent':<10} {'wins':>9} {'win rate':>9}")
+    print(f"{'arm':<10} {'after':>6} {'opponent':<10} {'wins':>9} {'win rate':>9}")
     for (arm, after, opponent), (wins, battles) in sorted(pooled.items()):
-        print(f"{arm:<7} {after:>6} {opponent:<10} {wins:>4}/{battles:<4} {wins / battles:>9.1%}")
+        print(f"{arm:<10} {after:>6} {opponent:<10} {wins:>4}/{battles:<4} {wins / battles:>9.1%}")
 
 
 def parse_args() -> argparse.Namespace:
