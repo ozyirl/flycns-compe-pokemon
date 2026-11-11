@@ -24,6 +24,15 @@ ACTIVE_FEATURES = 2 * (len(BOOST_NAMES) + len(STAT_NAMES) + len(POKEMON_TYPES))
 MOVE_FEATURES = MOVES_PER_POKEMON * 8
 OBSERVATION_DIM = GLOBAL_FEATURES + TEAM_FEATURES + ACTIVE_FEATURES + MOVE_FEATURES
 
+# Optional block appended after the stable observation: how each of the trainer's
+# team slots matches up against the opponent's active Pokemon. The Fly CNS input
+# and older checkpoints keep reading only the first OBSERVATION_DIM values.
+MATCHUP_FEATURE_SIZE = 5
+MATCHUP_FEATURES = TEAM_SIZE * MATCHUP_FEATURE_SIZE
+MATCHUP_OBSERVATION_DIM = OBSERVATION_DIM + MATCHUP_FEATURES
+# Base power x accuracy x STAB x effectiveness of a strong super-effective STAB move.
+EXPECTED_POWER_SCALE = 600.0
+
 
 def _clip(value: float, low: float = -1.0, high: float = 1.0) -> float:
     return float(np.clip(value, low, high))
@@ -93,6 +102,57 @@ def _moves_features(user: Pokemon | None, target: Pokemon | None) -> list[float]
         features.extend(_move_features(move, user, target))
     features.extend([0.0] * ((MOVES_PER_POKEMON - len(moves)) * 8))
     return features
+
+
+def _expected_power(move: Move, user: Pokemon, target: Pokemon) -> float:
+    if move.category is MoveCategory.STATUS or move.type is None:
+        return 0.0
+    accuracy = 1.0 if move.accuracy is True or move.accuracy is None else float(move.accuracy)
+    stab = 1.5 if move.type in user.types else 1.0
+    return move.base_power * accuracy * stab * target.damage_multiplier(move.type)
+
+
+def _best_type_effectiveness(attacker: Pokemon, defender: Pokemon) -> float:
+    return max((defender.damage_multiplier(t) for t in attacker.types if t is not None), default=1.0)
+
+
+def _slot_matchup(mon: Pokemon, opponent: Pokemon) -> list[float]:
+    speed = np.sign(mon.base_stats.get("spe", 0) - opponent.base_stats.get("spe", 0))
+    best_move = max((_expected_power(move, mon, opponent) for move in mon.moves.values()), default=0.0)
+    threat = max((_expected_power(move, opponent, mon) for move in opponent.moves.values()), default=0.0)
+    return [
+        _clip(_best_type_effectiveness(mon, opponent) / 4.0, 0.0, 1.0),
+        _clip(_best_type_effectiveness(opponent, mon) / 4.0, 0.0, 1.0),
+        float(speed),
+        _clip(best_move / EXPECTED_POWER_SCALE, 0.0, 1.0),
+        _clip(threat / EXPECTED_POWER_SCALE, 0.0, 1.0),
+    ]
+
+
+def embed_matchups(battle: Battle) -> np.ndarray:
+    """Score each own team slot against the opponent's active Pokemon.
+
+    Per slot: best STAB-type effectiveness dealt and taken (/4), base-speed
+    comparison (-1, 0, 1), and the expected power of the slot's best known move
+    and of the opponent's best revealed move against it. Zeros when there is no
+    opponent active Pokemon or no team member in the slot.
+    """
+
+    features: list[float] = []
+    opponent = battle.opponent_active_pokemon
+    pokemon = list(battle.team.values())[:TEAM_SIZE]
+    for mon in pokemon:
+        features.extend(
+            _slot_matchup(mon, opponent) if opponent is not None else [0.0] * MATCHUP_FEATURE_SIZE
+        )
+    features.extend([0.0] * ((TEAM_SIZE - len(pokemon)) * MATCHUP_FEATURE_SIZE))
+    return np.asarray(features, dtype=np.float32)
+
+
+def embed_battle_with_matchups(battle: Battle) -> np.ndarray:
+    """The stable observation followed by :func:`embed_matchups`."""
+
+    return np.concatenate([embed_battle(battle), embed_matchups(battle)])
 
 
 def embed_battle(battle: Battle) -> np.ndarray:

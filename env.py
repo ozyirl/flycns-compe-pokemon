@@ -11,21 +11,26 @@ from poke_env.battle import Battle
 from poke_env.environment import SingleAgentWrapper, SinglesEnv
 from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer, SimpleHeuristicsPlayer
 
-from encoding import OBSERVATION_DIM, embed_battle
+from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM, embed_battle, embed_battle_with_matchups
 
 
 DEFAULT_BATTLE_FORMAT = "gen9randombattle"
 
 
 class ShowdownEnv(SinglesEnv):
-    """Singles battle environment with the project's shared state and reward."""
+    """Singles battle environment with the project's shared state and reward.
 
-    def __init__(self, **kwargs: Any) -> None:
+    ``include_matchups`` appends the per-slot matchup block after the stable
+    observation, for policies that read it.
+    """
+
+    def __init__(self, *, include_matchups: bool = False, **kwargs: Any) -> None:
+        self.include_matchups = include_matchups
         super().__init__(**kwargs)
         state_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(OBSERVATION_DIM,),
+            shape=(MATCHUP_OBSERVATION_DIM if include_matchups else OBSERVATION_DIM,),
             dtype=np.float32,
         )
         self.observation_spaces = {
@@ -33,7 +38,7 @@ class ShowdownEnv(SinglesEnv):
         }
 
     def embed_battle(self, battle: Battle) -> np.ndarray:
-        return embed_battle(battle)
+        return embed_battle_with_matchups(battle) if self.include_matchups else embed_battle(battle)
 
     def calc_reward(self, battle: Battle) -> float:
         return self.reward_computing_helper(
