@@ -104,6 +104,8 @@ class FlyCNSHybridActorCritic(nn.Module):
 
     architecture = ARCHITECTURE
     format_version = WEIGHTS_FORMAT_VERSION
+    # Modules a subclass adds on top of a plain hybrid, zero-initialized by from_hybrid.
+    widened_modules: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         super().__init__()
@@ -146,6 +148,18 @@ class FlyCNSHybridActorCritic(nn.Module):
         model = cls()
         model.policy_head.fly.load_state_dict(source.policy_head.state_dict())
         model.value_head.fly.load_state_dict(source.value_head.state_dict())
+        return model
+
+    @classmethod
+    def from_hybrid(cls, source: "FlyCNSHybridActorCritic") -> "FlyCNSHybridActorCritic":
+        """Copy every hybrid weight; the zeroed added modules keep the outputs initially identical."""
+
+        if type(source) is not FlyCNSHybridActorCritic or not cls.widened_modules:
+            raise TypeError("from_hybrid widens a plain hybrid actor-critic into a subclass")
+        model = cls()
+        missing, unexpected = model.load_state_dict(source.state_dict(), strict=False)
+        if unexpected or any(key.split(".")[1] not in cls.widened_modules for key in missing):
+            raise ValueError(f"Unexpected hybrid weights: missing={missing}, unexpected={unexpected}")
         return model
 
     def save_weights(self, path: str | Path) -> None:
@@ -266,24 +280,13 @@ class FlyCNSContextualActorCritic(FlyCNSHybridActorCritic):
 
     architecture = CONTEXT_ARCHITECTURE
     format_version = CONTEXT_WEIGHTS_FORMAT_VERSION
+    widened_modules = ("move_context", "switch_context", "raw_mlp")
 
     def _make_policy_head(self) -> ContextualPolicyHead:
         return ContextualPolicyHead()
 
     def _make_value_head(self) -> ContextualValueHead:
         return ContextualValueHead()
-
-    @classmethod
-    def from_hybrid(cls, source: FlyCNSHybridActorCritic) -> "FlyCNSContextualActorCritic":
-        """Copy every hybrid weight; zeroed MLP outputs keep the outputs initially identical."""
-
-        if type(source) is not FlyCNSHybridActorCritic:
-            raise TypeError("from_hybrid expects a plain hybrid actor-critic")
-        model = cls()
-        missing, unexpected = model.load_state_dict(source.state_dict(), strict=False)
-        if unexpected or any(not key.split(".")[1].endswith(("context", "mlp")) for key in missing):
-            raise ValueError(f"Unexpected hybrid weights: missing={missing}, unexpected={unexpected}")
-        return model
 
 
 _ARCHITECTURES: dict[str, type[FlyCNSHybridActorCritic]] = {

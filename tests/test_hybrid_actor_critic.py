@@ -38,6 +38,14 @@ def _inputs(batch: int = 3) -> tuple[torch.Tensor, torch.Tensor]:
     return activity, observation
 
 
+def _trained_hybrid() -> FlyCNSHybridActorCritic:
+    hybrid = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
+    with torch.no_grad():
+        hybrid.policy_head.move_scorer.weight.fill_(0.3)
+        hybrid.value_head.raw.weight.fill_(0.01)
+    return hybrid
+
+
 class FlyCNSHybridActorCriticTest(unittest.TestCase):
     def test_warm_start_reproduces_fly_only_outputs(self) -> None:
         source = _seeded_fly()
@@ -127,15 +135,8 @@ class FlyCNSHybridActorCriticTest(unittest.TestCase):
 
 
 class FlyCNSContextualActorCriticTest(unittest.TestCase):
-    def _trained_hybrid(self) -> FlyCNSHybridActorCritic:
-        hybrid = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
-        with torch.no_grad():
-            hybrid.policy_head.move_scorer.weight.fill_(0.3)
-            hybrid.value_head.raw.weight.fill_(0.01)
-        return hybrid
-
     def test_warm_start_reproduces_hybrid_outputs(self) -> None:
-        hybrid = self._trained_hybrid()
+        hybrid = _trained_hybrid()
         contextual = FlyCNSContextualActorCritic.from_hybrid(hybrid)
         activity, observation = _inputs()
 
@@ -145,6 +146,8 @@ class FlyCNSContextualActorCriticTest(unittest.TestCase):
     def test_from_hybrid_rejects_other_families(self) -> None:
         with self.assertRaises(TypeError):
             FlyCNSContextualActorCritic.from_hybrid(FlyCNSContextualActorCritic())
+        with self.assertRaises(TypeError):
+            FlyCNSHybridActorCritic.from_hybrid(_trained_hybrid())
 
     def test_context_collects_globals_both_actives_and_active_hp(self) -> None:
         observation = torch.zeros(OBSERVATION_DIM)
@@ -162,7 +165,7 @@ class FlyCNSContextualActorCriticTest(unittest.TestCase):
         self.assertEqual(context[16].item(), 0.5)
 
     def test_trained_context_changes_scores_with_battle_state(self) -> None:
-        contextual = FlyCNSContextualActorCritic.from_hybrid(self._trained_hybrid())
+        contextual = FlyCNSContextualActorCritic.from_hybrid(_trained_hybrid())
         torch.manual_seed(0)
         with torch.no_grad():
             torch.nn.init.normal_(contextual.policy_head.move_context[-1].weight)
@@ -176,7 +179,7 @@ class FlyCNSContextualActorCriticTest(unittest.TestCase):
         self.assertFalse(torch.allclose(before[0, 6:10], after[0, 6:10]))
 
     def test_parameter_groups_partition_and_round_trip(self) -> None:
-        contextual = FlyCNSContextualActorCritic.from_hybrid(self._trained_hybrid())
+        contextual = FlyCNSContextualActorCritic.from_hybrid(_trained_hybrid())
         raw = {id(item) for item in contextual.raw_parameters()}
         fly = {id(item) for item in contextual.fly_parameters()}
         self.assertFalse(raw & fly)
