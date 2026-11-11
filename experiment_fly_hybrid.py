@@ -9,6 +9,7 @@ Unlike ``update_once``, one Adam optimizer persists across steps.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import random
 import secrets
@@ -175,6 +176,18 @@ def ppo_epochs(
     }
 
 
+def disconnect(environment: SingleAgentWrapper, *, timeout: float = 10.0) -> None:
+    """Close both players' Showdown websockets.
+
+    ``PokeEnv.close`` only resets battle state; without this every per-battle
+    environment keeps two connections open until the process runs out of ports.
+    """
+
+    for agent in (environment.env.agent1, environment.env.agent2):
+        client = agent.ps_client
+        asyncio.run_coroutine_threadsafe(client.stop_listening(), client.loop).result(timeout)
+
+
 def training_environment(
     server: ServerConfiguration, opponent: str, *, include_matchups: bool = False
 ) -> SingleAgentWrapper:
@@ -212,6 +225,7 @@ def evaluate(
         result = run_matchup(opponent, environment, scripted_action(scripted), battles=battles, seed=seed)
     finally:
         environment.close()
+        disconnect(environment)
     if sha256(checkpoint) != checkpoint_hash:
         raise AssertionError(f"Checkpoint changed during read-only evaluation: {checkpoint}")
     return CheckpointEvaluation(
@@ -270,7 +284,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     for index in range(args.training_battles):
         completed = index + 1
         environment = training_environment(server, args.training_opponent, include_matchups=include_matchups)
-        pending.append(run_one_battle(environment, policy, seed=args.seed + index))
+        try:
+            pending.append(run_one_battle(environment, policy, seed=args.seed + index))
+        finally:
+            disconnect(environment)
         if len(pending) == BATCH_BATTLES or completed == args.training_battles:
             stats = ppo_epochs(policy, optimizer, combine_rollouts(tuple(pending)))
             wins = sum(rollout.outcome == "win" for rollout in pending)

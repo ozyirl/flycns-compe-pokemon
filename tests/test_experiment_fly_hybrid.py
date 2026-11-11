@@ -4,12 +4,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
+from poke_env.concurrency import POKE_LOOP
 
 from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
-from experiment_fly_hybrid import BatchStats, make_model, make_optimizer, ppo_epochs, write_report
+from experiment_fly_hybrid import BatchStats, disconnect, make_model, make_optimizer, ppo_epochs, write_report
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import (
@@ -115,6 +117,19 @@ class ExperimentFlyHybridTest(unittest.TestCase):
         self.assertTrue(saved["complete"])
         self.assertEqual(saved["batches"][0]["wins"], 3)
         self.assertEqual(leftovers, [])
+
+    def test_disconnect_stops_both_players_websockets(self) -> None:
+        stopped: list[str] = []
+
+        def agent(name: str) -> SimpleNamespace:
+            async def stop_listening() -> None:
+                stopped.append(name)
+
+            return SimpleNamespace(ps_client=SimpleNamespace(loop=POKE_LOOP, stop_listening=stop_listening))
+
+        disconnect(SimpleNamespace(env=SimpleNamespace(agent1=agent("agent1"), agent2=agent("agent2"))))
+
+        self.assertEqual(stopped, ["agent1", "agent2"])
 
 
 if __name__ == "__main__":
