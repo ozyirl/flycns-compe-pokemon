@@ -8,11 +8,15 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from encoding import OBSERVATION_DIM
+from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
 from experiment_fly_hybrid import BatchStats, make_model, make_optimizer, ppo_epochs, write_report
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
-from flycns.hybrid_actor_critic import FlyCNSContextualActorCritic, FlyCNSHybridActorCritic
+from flycns.hybrid_actor_critic import (
+    FlyCNSContextualActorCritic,
+    FlyCNSHybridActorCritic,
+    FlyCNSMatchupActorCritic,
+)
 from flycns.ppo_policy import FlyCNSPPOPolicy
 from smoke_fly_rollout import RolloutResult, TurnRecord
 
@@ -45,6 +49,11 @@ class ExperimentFlyHybridTest(unittest.TestCase):
             contextual = make_model("contextual", hybrid_path)
             self.assertIsInstance(contextual, FlyCNSContextualActorCritic)
             self.assertIsInstance(make_model("contextual", fly_path), FlyCNSContextualActorCritic)
+            self.assertIsInstance(make_model("matchup", hybrid_path), FlyCNSMatchupActorCritic)
+            contextual_path = Path(directory) / "contextual.pt"
+            contextual.save_weights(contextual_path)
+            with self.assertRaisesRegex(ValueError, "FlyCNSContextualActorCritic checkpoint"):
+                make_model("matchup", contextual_path)
 
         torch.testing.assert_close(
             continued.policy_head.move_scorer.weight, hybrid.policy_head.move_scorer.weight
@@ -60,31 +69,37 @@ class ExperimentFlyHybridTest(unittest.TestCase):
         self.assertEqual([group["lr"] for group in fly_optimizer.param_groups], [3e-4])
 
     def test_ppo_epochs_train_raw_scorers_with_persistent_optimizer(self) -> None:
-        model = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
-        policy = FlyCNSPPOPolicy(actor_critic=model)
-        optimizer = make_optimizer(model, learning_rate=3e-4, raw_learning_rate=1e-2)
-        mask = np.zeros(ACTION_COUNT, dtype=np.int8)
-        mask[[6, 7]] = 1
-        rng = np.random.default_rng(0)
-        turns = []
-        for index, reward in enumerate((1.0, -1.0, 2.0)):
-            observation = rng.random(OBSERVATION_DIM).astype(np.float32)
-            decision = policy.predict(observation, mask, deterministic=False)
-            turns.append(TurnRecord(
-                observation=observation, action_mask=mask, selected_action=decision.selected_action_index,
-                log_probability=decision.action_log_probability, state_value=decision.state_value,
-                reward=reward, done=index == 2,
-            ))
-        rollout = RolloutResult(tuple(turns), 2.0, "win", False, True)
-        before = [item.detach().clone() for item in model.raw_parameters()]
+        hybrid = FlyCNSHybridActorCritic.from_fly(_seeded_fly())
+        cases = (
+            (hybrid, OBSERVATION_DIM, [6, 7]),
+            (FlyCNSMatchupActorCritic.from_hybrid(hybrid), MATCHUP_OBSERVATION_DIM, [1, 2, 6]),
+        )
+        for model, width, legal_actions in cases:
+            with self.subTest(model=type(model).__name__):
+                policy = FlyCNSPPOPolicy(actor_critic=model)
+                optimizer = make_optimizer(model, learning_rate=3e-4, raw_learning_rate=1e-2)
+                mask = np.zeros(ACTION_COUNT, dtype=np.int8)
+                mask[legal_actions] = 1
+                rng = np.random.default_rng(0)
+                turns = []
+                for index, reward in enumerate((1.0, -1.0, 2.0)):
+                    observation = rng.random(width).astype(np.float32)
+                    decision = policy.predict(observation, mask, deterministic=False)
+                    turns.append(TurnRecord(
+                        observation=observation, action_mask=mask, selected_action=decision.selected_action_index,
+                        log_probability=decision.action_log_probability, state_value=decision.state_value,
+                        reward=reward, done=index == 2,
+                    ))
+                rollout = RolloutResult(tuple(turns), 2.0, "win", False, True)
+                before = [item.detach().clone() for item in model.raw_parameters()]
 
-        stats = ppo_epochs(policy, optimizer, rollout, epochs=2)
+                stats = ppo_epochs(policy, optimizer, rollout, epochs=2)
 
-        self.assertTrue(all(np.isfinite(value) for value in stats.values()))
-        self.assertTrue(any(
-            not torch.equal(item, old) for item, old in zip(model.raw_parameters(), before, strict=True)
-        ))
-        self.assertEqual(len(optimizer.state), len(list(model.parameters())))
+                self.assertTrue(all(np.isfinite(value) for value in stats.values()))
+                self.assertTrue(any(
+                    not torch.equal(item, old) for item, old in zip(model.raw_parameters(), before, strict=True)
+                ))
+                self.assertEqual(len(optimizer.state), len(list(model.parameters())))
 
     def test_write_report_serializes_rows_and_replaces_previous_file(self) -> None:
         batches = [BatchStats(8, 120, 3, 0.1, 2.0, 1.2, 0.05, 0.01)]

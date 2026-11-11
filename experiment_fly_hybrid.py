@@ -22,6 +22,7 @@ from poke_env.ps_client import AccountConfiguration, LocalhostServerConfiguratio
 from torch.distributions import Categorical
 
 from benchmark_fly_opponent import run_matchup, scripted_action
+from encoding import OBSERVATION_DIM
 from env import DEFAULT_BATTLE_FORMAT, ShowdownEnv, make_opponent
 from experiment_fly_maxpower import DEFAULT_V1, sha256
 from experiment_fly_maxpower_batched import BATCH_BATTLES, combine_rollouts
@@ -29,6 +30,7 @@ from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import (
     FlyCNSContextualActorCritic,
     FlyCNSHybridActorCritic,
+    FlyCNSMatchupActorCritic,
     load_actor_critic,
 )
 from flycns.ppo_policy import FlyCNSPPOPolicy
@@ -36,7 +38,13 @@ from smoke_fly_ppo_update import advantages_and_returns, normalized_policy_advan
 from smoke_fly_rollout import RolloutResult, run_one_battle
 
 
-ARMS = ("fly", "hybrid", "contextual")
+ARM_MODELS: dict[str, type[FlyCNSActorCritic] | type[FlyCNSHybridActorCritic]] = {
+    "fly": FlyCNSActorCritic,
+    "hybrid": FlyCNSHybridActorCritic,
+    "contextual": FlyCNSContextualActorCritic,
+    "matchup": FlyCNSMatchupActorCritic,
+}
+ARMS = tuple(ARM_MODELS)
 EPOCHS_PER_BATCH = 8
 CLIP_RANGE = 0.2
 VALUE_COEFFICIENT = 0.5
@@ -75,20 +83,20 @@ class CheckpointEvaluation:
 def make_model(arm: str, checkpoint: Path) -> FlyCNSActorCritic | FlyCNSHybridActorCritic:
     """Load the starting heads, widening a simpler source to the arm's architecture.
 
-    Widening is output-preserving: fly -> hybrid -> contextual each add zeroed pathways.
+    Widening is output-preserving: fly -> hybrid -> contextual or matchup each add
+    zeroed pathways.
     """
 
     if arm not in ARMS:
         raise ValueError(f"Unknown arm {arm!r}; expected one of {ARMS}")
+    target = ARM_MODELS[arm]
     source = load_actor_critic(checkpoint)
-    rank = {FlyCNSActorCritic: 0, FlyCNSHybridActorCritic: 1, FlyCNSContextualActorCritic: 2}
-    target = ARMS.index(arm)
-    if rank[type(source)] > target:
-        raise ValueError(f"The {arm} arm cannot start from a {type(source).__name__} checkpoint")
-    if rank[type(source)] == 0 and target > 0:
+    if type(source) is FlyCNSActorCritic and target is not FlyCNSActorCritic:
         source = FlyCNSHybridActorCritic.from_fly(source)
-    if rank[type(source)] == 1 and target > 1:
-        source = FlyCNSContextualActorCritic.from_hybrid(source)
+    if type(source) is FlyCNSHybridActorCritic and issubclass(target, FlyCNSHybridActorCritic) and target.widened_modules:
+        source = target.from_hybrid(source)
+    if type(source) is not target:
+        raise ValueError(f"The {arm} arm cannot start from a {type(source).__name__} checkpoint")
     return source
 
 
@@ -118,7 +126,7 @@ def ppo_epochs(
     """Full-batch clipped PPO with normalized advantages; Fly features computed once."""
 
     advantages, returns = advantages_and_returns(rollout)
-    observations = np.stack([turn.observation for turn in rollout.turns])
+    observations = policy._model_observations(np.stack([turn.observation for turn in rollout.turns]))
     masks = np.stack([turn.action_mask for turn in rollout.turns]).astype(bool)
     actions = np.asarray([turn.selected_action for turn in rollout.turns], dtype=np.int64)
     if not np.all(masks[np.arange(len(actions)), actions]):
@@ -167,10 +175,13 @@ def ppo_epochs(
     }
 
 
-def training_environment(server: ServerConfiguration, opponent: str) -> SingleAgentWrapper:
+def training_environment(
+    server: ServerConfiguration, opponent: str, *, include_matchups: bool = False
+) -> SingleAgentWrapper:
     nonce = secrets.token_hex(5)
     return SingleAgentWrapper(
         ShowdownEnv(
+            include_matchups=include_matchups,
             battle_format=DEFAULT_BATTLE_FORMAT,
             server_configuration=server,
             account_configuration1=AccountConfiguration(f"fh{nonce}a", None),
@@ -254,12 +265,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "evaluations": evaluations,
     }
 
+    include_matchups = model.observation_size > OBSERVATION_DIM
     pending: list[RolloutResult] = []
     for index in range(args.training_battles):
         completed = index + 1
-        pending.append(run_one_battle(
-            training_environment(server, args.training_opponent), policy, seed=args.seed + index
-        ))
+        environment = training_environment(server, args.training_opponent, include_matchups=include_matchups)
+        pending.append(run_one_battle(environment, policy, seed=args.seed + index))
         if len(pending) == BATCH_BATTLES or completed == args.training_battles:
             stats = ppo_epochs(policy, optimizer, combine_rollouts(tuple(pending)))
             wins = sum(rollout.outcome == "win" for rollout in pending)
@@ -326,9 +337,7 @@ def evaluate_directory(args: argparse.Namespace) -> None:
         raise FileExistsError(f"Refusing to overwrite {directory / 'results.json'}")
     server = ServerConfiguration(args.server_url, LocalhostServerConfiguration.authentication_url)
     model = load_actor_critic(checkpoints[0])
-    arm = {FlyCNSActorCritic: "fly", FlyCNSHybridActorCritic: "hybrid", FlyCNSContextualActorCritic: "contextual"}[
-        type(model)
-    ]
+    arm = next(name for name, model_type in ARM_MODELS.items() if type(model) is model_type)
     evaluations: list[CheckpointEvaluation] = []
     report: dict[str, object] = {
         "arm": arm,
