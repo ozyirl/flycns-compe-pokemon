@@ -70,7 +70,9 @@ class HybridPolicyHead(nn.Module):
             nn.init.zeros_(scorer.bias)
 
     def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
-        moves = observation[..., MOVE_FEATURES_OFFSET:].unflatten(-1, (MOVES_PER_POKEMON, MOVE_FEATURE_SIZE))
+        moves = observation[..., MOVE_FEATURES_OFFSET:OBSERVATION_DIM].unflatten(
+            -1, (MOVES_PER_POKEMON, MOVE_FEATURE_SIZE)
+        )
         move_scores = self.move_scorer(move_scorer_inputs(moves)).squeeze(-1)
         switches = observation[
             ..., SWITCH_FEATURES_OFFSET:SWITCH_FEATURES_OFFSET + SWITCH_ACTIONS * SWITCH_FEATURE_SIZE
@@ -93,7 +95,7 @@ class HybridValueHead(nn.Module):
         nn.init.zeros_(self.raw.weight)
 
     def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
-        return self.fly(normalized_activity) + self.raw(observation)
+        return self.fly(normalized_activity) + self.raw(observation[..., :OBSERVATION_DIM])
 
     def raw_parameters(self) -> list[nn.Parameter]:
         return list(self.raw.parameters())
@@ -104,6 +106,7 @@ class FlyCNSHybridActorCritic(nn.Module):
 
     architecture = ARCHITECTURE
     format_version = WEIGHTS_FORMAT_VERSION
+    observation_size = OBSERVATION_DIM
     # Modules a subclass adds on top of a plain hybrid, zero-initialized by from_hybrid.
     widened_modules: tuple[str, ...] = ()
 
@@ -124,8 +127,8 @@ class FlyCNSHybridActorCritic(nn.Module):
     def forward(
         self, descending_activity: torch.Tensor, observation: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if observation is None or observation.shape[-1] != OBSERVATION_DIM:
-            raise ValueError(f"Hybrid actor-critic requires the {OBSERVATION_DIM}-value observation")
+        if observation is None or observation.shape[-1] != self.observation_size:
+            raise ValueError(f"{type(self).__name__} requires the {self.observation_size}-value observation")
         normalized_activity = self.input_normalization(descending_activity)
         return (
             self.policy_head(normalized_activity, observation),
@@ -168,7 +171,7 @@ class FlyCNSHybridActorCritic(nn.Module):
                 "architecture": self.architecture,
                 "format_version": self.format_version,
                 "descending_activity_size": DESCENDING_ACTIVITY_SIZE,
-                "observation_size": OBSERVATION_DIM,
+                "observation_size": self.observation_size,
                 "action_count": ACTION_COUNT,
                 "state_dict": self.state_dict(),
             },
@@ -184,7 +187,7 @@ class FlyCNSHybridActorCritic(nn.Module):
             "architecture": cls.architecture,
             "format_version": cls.format_version,
             "descending_activity_size": DESCENDING_ACTIVITY_SIZE,
-            "observation_size": OBSERVATION_DIM,
+            "observation_size": cls.observation_size,
             "action_count": ACTION_COUNT,
         }
         actual_metadata = {key: payload.get(key) for key in expected_metadata}
@@ -244,7 +247,9 @@ class ContextualPolicyHead(HybridPolicyHead):
 
     def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
         context = battle_context(observation)
-        moves = observation[..., MOVE_FEATURES_OFFSET:].unflatten(-1, (MOVES_PER_POKEMON, MOVE_FEATURE_SIZE))
+        moves = observation[..., MOVE_FEATURES_OFFSET:OBSERVATION_DIM].unflatten(
+            -1, (MOVES_PER_POKEMON, MOVE_FEATURE_SIZE)
+        )
         switches = observation[
             ..., SWITCH_FEATURES_OFFSET:SWITCH_FEATURES_OFFSET + SWITCH_ACTIONS * SWITCH_FEATURE_SIZE
         ].unflatten(-1, (SWITCH_ACTIONS, SWITCH_FEATURE_SIZE))
@@ -269,7 +274,7 @@ class ContextualValueHead(HybridValueHead):
         self.raw_mlp = _residual_mlp(OBSERVATION_DIM, VALUE_HIDDEN_SIZE)
 
     def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
-        return super().forward(normalized_activity, observation) + self.raw_mlp(observation)
+        return super().forward(normalized_activity, observation) + self.raw_mlp(observation[..., :OBSERVATION_DIM])
 
     def raw_parameters(self) -> list[nn.Parameter]:
         return [*super().raw_parameters(), *self.raw_mlp.parameters()]

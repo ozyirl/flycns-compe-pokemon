@@ -8,6 +8,7 @@ from typing import Any
 import torch
 from torch import nn
 
+from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.trainable_decoder import DESCENDING_ACTIVITY_SIZE, TrainableActionDecoder
 
@@ -18,6 +19,9 @@ WEIGHTS_FORMAT_VERSION = 2
 
 class FlyCNSActorCritic(nn.Module):
     """Normalize fixed spike features before the trainable policy and value heads."""
+
+    # Only the Fly CNS input reads the observation, and it needs the stable block.
+    observation_size = OBSERVATION_DIM
 
     def __init__(self) -> None:
         super().__init__()

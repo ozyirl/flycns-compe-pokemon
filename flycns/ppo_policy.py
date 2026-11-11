@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.distributions import Categorical
 
-from encoding import OBSERVATION_DIM
+from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.graph import FlyGraph
@@ -39,6 +39,8 @@ class BatchPolicyEvaluation:
 class FlyCNSPPOPolicy:
     """Evaluate one observation without updating weights or executing an action.
 
+    Observations may be the stable vector or include the matchup block; the Fly
+    CNS reads the stable part and the actor-critic its own ``observation_size``.
     ``policy_logits`` in the result are masked: illegal indices have ``-inf``.
     Deterministic evaluation chooses the highest legal logit, with the lowest
     action index breaking ties. Sampling uses the same masked categorical law.
@@ -73,8 +75,20 @@ class FlyCNSPPOPolicy:
             raise ValueError("Each action_mask must contain at least one legal action")
         return masks.astype(bool, copy=False)
 
+    def _model_observations(self, observations: np.ndarray) -> np.ndarray:
+        """Check the observation width and keep the prefix this actor-critic reads."""
+
+        width = observations.shape[-1] if observations.ndim else 0
+        required = self.actor_critic.observation_size
+        if width not in (OBSERVATION_DIM, MATCHUP_OBSERVATION_DIM) or width < required:
+            raise ValueError(
+                f"{type(self.actor_critic).__name__} needs observations of at least {required} values "
+                f"({OBSERVATION_DIM} or {MATCHUP_OBSERVATION_DIM}), received width {width}"
+            )
+        return observations[..., :required]
+
     def _descending_activity(self, observation: np.ndarray) -> np.ndarray:
-        stimulation = self.adapter.adapt(observation)
+        stimulation = self.adapter.adapt(observation[:OBSERVATION_DIM])
         report = self.simulator.run(stimulation)
         return report.spike_counts[report.descending_indices].astype(np.float32)
 
@@ -86,7 +100,7 @@ class FlyCNSPPOPolicy:
         deterministic: bool = True,
     ) -> PolicyDecision:
         mask = self._validated_masks(action_mask, (ACTION_COUNT,))
-        observation_array = np.asarray(observation, dtype=np.float32)
+        observation_array = self._model_observations(np.asarray(observation, dtype=np.float32))
         descending = self._descending_activity(observation_array)
 
         parameter = next(self.actor_critic.parameters())
@@ -125,11 +139,9 @@ class FlyCNSPPOPolicy:
         """Evaluate supplied legal actions without sampling or updating weights."""
 
         observation_array = np.asarray(observations, dtype=np.float32)
-        if observation_array.ndim != 2 or observation_array.shape[1] != OBSERVATION_DIM:
-            raise ValueError(
-                f"Expected observation batch shape (batch, {OBSERVATION_DIM}), "
-                f"received {observation_array.shape}"
-            )
+        if observation_array.ndim != 2:
+            raise ValueError(f"Expected an observation batch (batch, width), received {observation_array.shape}")
+        observation_array = self._model_observations(observation_array)
         batch_size = observation_array.shape[0]
         if batch_size == 0:
             raise ValueError("Observation batch must not be empty")

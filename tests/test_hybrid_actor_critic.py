@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from encoding import OBSERVATION_DIM
+from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import (
@@ -132,6 +132,18 @@ class FlyCNSHybridActorCriticTest(unittest.TestCase):
 
         self.assertIn(decision.selected_action_index, (1, 6, 7))
         self.assertTrue(np.isfinite(decision.state_value))
+
+    def test_policy_reads_only_the_stable_prefix_of_a_matchup_observation(self) -> None:
+        policy = FlyCNSPPOPolicy(actor_critic=_trained_hybrid())
+        mask = np.ones(ACTION_COUNT, dtype=np.int8)
+        observation = np.linspace(0.0, 1.0, MATCHUP_OBSERVATION_DIM, dtype=np.float32)
+
+        wide = policy.predict(observation, mask)
+        stable = policy.predict(observation[:OBSERVATION_DIM], mask)
+
+        self.assertEqual(wide, stable)
+        with self.assertRaisesRegex(ValueError, "width 200"):
+            policy.predict(np.zeros(200, dtype=np.float32), mask)
 
 
 class FlyCNSContextualActorCriticTest(unittest.TestCase):
