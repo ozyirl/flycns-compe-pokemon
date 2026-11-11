@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from encoding import MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
+from encoding import MATCHUP_FEATURE_SIZE, MATCHUP_OBSERVATION_DIM, OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.hybrid_actor_critic import (
@@ -19,6 +19,7 @@ from flycns.hybrid_actor_critic import (
     SWITCH_FEATURES_OFFSET,
     FlyCNSContextualActorCritic,
     FlyCNSHybridActorCritic,
+    FlyCNSMatchupActorCritic,
     battle_context,
     load_actor_critic,
 )
@@ -31,10 +32,10 @@ def _seeded_fly() -> FlyCNSActorCritic:
     return FlyCNSActorCritic()
 
 
-def _inputs(batch: int = 3) -> tuple[torch.Tensor, torch.Tensor]:
+def _inputs(batch: int = 3, width: int = OBSERVATION_DIM) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(5)
     activity = torch.rand(batch, DESCENDING_ACTIVITY_SIZE, generator=generator) * 10
-    observation = torch.rand(batch, OBSERVATION_DIM, generator=generator)
+    observation = torch.rand(batch, width, generator=generator)
     return activity, observation
 
 
@@ -206,6 +207,64 @@ class FlyCNSContextualActorCriticTest(unittest.TestCase):
 
         self.assertIsInstance(loaded, FlyCNSContextualActorCritic)
         torch.testing.assert_close(loaded(activity, observation), contextual(activity, observation))
+
+
+class FlyCNSMatchupActorCriticTest(unittest.TestCase):
+    def test_warm_start_reproduces_hybrid_outputs_on_the_stable_prefix(self) -> None:
+        hybrid = _trained_hybrid()
+        matchup = FlyCNSMatchupActorCritic.from_hybrid(hybrid)
+        activity, observation = _inputs(width=MATCHUP_OBSERVATION_DIM)
+
+        expected = hybrid(activity, observation[:, :OBSERVATION_DIM])
+        for actual, wanted in zip(matchup(activity, observation), expected, strict=True):
+            torch.testing.assert_close(actual, wanted)
+
+    def test_requires_the_matchup_block(self) -> None:
+        activity, observation = _inputs()
+        with self.assertRaisesRegex(ValueError, str(MATCHUP_OBSERVATION_DIM)):
+            FlyCNSMatchupActorCritic()(activity, observation)
+
+    def test_matchup_score_reaches_only_that_switch(self) -> None:
+        matchup = FlyCNSMatchupActorCritic.from_hybrid(_trained_hybrid())
+        with torch.no_grad():
+            matchup.policy_head.matchup_scorer.weight[0, 0] = 1.0  # Offensive effectiveness input.
+        activity, observation = _inputs(1, MATCHUP_OBSERVATION_DIM)
+        baseline, _ = matchup(activity, observation)
+        bumped = observation.clone()
+        bumped[0, OBSERVATION_DIM + 3 * MATCHUP_FEATURE_SIZE] += 0.25  # Slot 3, one more x1 of effectiveness.
+
+        changed, _ = matchup(activity, bumped)
+
+        expected = torch.zeros(ACTION_COUNT)
+        expected[3] = 1.0
+        torch.testing.assert_close((changed - baseline)[0], expected, rtol=0.0, atol=1e-5)
+
+    def test_parameter_groups_partition_and_round_trip(self) -> None:
+        matchup = FlyCNSMatchupActorCritic.from_hybrid(_trained_hybrid())
+        with torch.no_grad():
+            matchup.policy_head.matchup_scorer.weight.fill_(0.2)
+        raw = {id(item) for item in matchup.raw_parameters()}
+        fly = {id(item) for item in matchup.fly_parameters()}
+        self.assertFalse(raw & fly)
+        self.assertEqual(raw | fly, {id(item) for item in matchup.parameters()})
+        activity, observation = _inputs(width=MATCHUP_OBSERVATION_DIM)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "matchup.pt"
+            matchup.save_weights(path)
+            loaded = load_actor_critic(path)
+
+        self.assertIsInstance(loaded, FlyCNSMatchupActorCritic)
+        torch.testing.assert_close(loaded(activity, observation), matchup(activity, observation))
+
+    def test_policy_requires_matchup_observations(self) -> None:
+        policy = FlyCNSPPOPolicy(actor_critic=FlyCNSMatchupActorCritic.from_hybrid(_trained_hybrid()))
+        mask = np.ones(ACTION_COUNT, dtype=np.int8)
+
+        decision = policy.predict(np.zeros(MATCHUP_OBSERVATION_DIM, dtype=np.float32), mask)
+
+        self.assertTrue(np.isfinite(decision.state_value))
+        with self.assertRaisesRegex(ValueError, f"at least {MATCHUP_OBSERVATION_DIM}"):
+            policy.predict(np.zeros(OBSERVATION_DIM, dtype=np.float32), mask)
 
 
 if __name__ == "__main__":

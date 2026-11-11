@@ -10,7 +10,11 @@ from torch import nn
 
 from encoding import (
     ACTIVE_FEATURES,
+    EXPECTED_POWER_SCALE,
     GLOBAL_FEATURES,
+    MATCHUP_FEATURE_SIZE,
+    MATCHUP_FEATURES,
+    MATCHUP_OBSERVATION_DIM,
     MOVES_PER_POKEMON,
     OBSERVATION_DIM,
     TEAM_FEATURES,
@@ -294,9 +298,74 @@ class FlyCNSContextualActorCritic(FlyCNSHybridActorCritic):
         return ContextualValueHead()
 
 
+MATCHUP_ARCHITECTURE = "fly-hybrid-matchup"
+MATCHUP_WEIGHTS_FORMAT_VERSION = 1
+# Expected move power in units of 100, so a strong move is a few scorer units.
+EXPECTED_POWER_UNIT = 100.0
+
+
+def matchup_scorer_inputs(matchups: torch.Tensor) -> torch.Tensor:
+    """Undo the encoder's compression of each slot's matchup block (see ``embed_matchups``)."""
+
+    effectiveness = matchups[..., 0:2] * 4.0
+    speed = matchups[..., 2:3]
+    expected_power = matchups[..., 3:5] * EXPECTED_POWER_SCALE / EXPECTED_POWER_UNIT
+    return torch.cat([effectiveness, speed, expected_power], dim=-1)
+
+
+class MatchupPolicyHead(HybridPolicyHead):
+    """Hybrid slot scores plus a switch scorer over each slot's matchup with the opponent."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.matchup_scorer = nn.Linear(MATCHUP_FEATURE_SIZE, 1)
+        nn.init.zeros_(self.matchup_scorer.weight)
+        nn.init.zeros_(self.matchup_scorer.bias)
+
+    def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        matchups = observation[..., OBSERVATION_DIM:].unflatten(-1, (SWITCH_ACTIONS, MATCHUP_FEATURE_SIZE))
+        switch_scores = self.matchup_scorer(matchup_scorer_inputs(matchups)).squeeze(-1)
+        move_scores = switch_scores.new_zeros(*switch_scores.shape[:-1], ACTION_COUNT - SWITCH_ACTIONS)
+        return super().forward(normalized_activity, observation) + torch.cat([switch_scores, move_scores], dim=-1)
+
+    def raw_parameters(self) -> list[nn.Parameter]:
+        return [*super().raw_parameters(), *self.matchup_scorer.parameters()]
+
+
+class MatchupValueHead(HybridValueHead):
+    """Hybrid linear value plus a linear term over the matchup block."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.matchup_raw = nn.Linear(MATCHUP_FEATURES, 1, bias=False)
+        nn.init.zeros_(self.matchup_raw.weight)
+
+    def forward(self, normalized_activity: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        return super().forward(normalized_activity, observation) + self.matchup_raw(observation[..., OBSERVATION_DIM:])
+
+    def raw_parameters(self) -> list[nn.Parameter]:
+        return [*super().raw_parameters(), *self.matchup_raw.parameters()]
+
+
+class FlyCNSMatchupActorCritic(FlyCNSHybridActorCritic):
+    """Hybrid actor-critic that also reads how each team slot matches up against the opponent."""
+
+    architecture = MATCHUP_ARCHITECTURE
+    format_version = MATCHUP_WEIGHTS_FORMAT_VERSION
+    observation_size = MATCHUP_OBSERVATION_DIM
+    widened_modules = ("matchup_scorer", "matchup_raw")
+
+    def _make_policy_head(self) -> MatchupPolicyHead:
+        return MatchupPolicyHead()
+
+    def _make_value_head(self) -> MatchupValueHead:
+        return MatchupValueHead()
+
+
 _ARCHITECTURES: dict[str, type[FlyCNSHybridActorCritic]] = {
     ARCHITECTURE: FlyCNSHybridActorCritic,
     CONTEXT_ARCHITECTURE: FlyCNSContextualActorCritic,
+    MATCHUP_ARCHITECTURE: FlyCNSMatchupActorCritic,
 }
 
 

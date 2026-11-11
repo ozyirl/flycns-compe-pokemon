@@ -10,10 +10,11 @@ import torch
 from poke_env.environment import SinglesEnv
 from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer, SimpleHeuristicsPlayer
 
-from encoding import OBSERVATION_DIM
+from encoding import MATCHUP_FEATURES, OBSERVATION_DIM
 from env import DEFAULT_BATTLE_FORMAT, make_opponent
 from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
+from flycns.hybrid_actor_critic import FlyCNSMatchupActorCritic
 from flycns.player import FlyCNSPlayer
 from flycns.ppo_policy import PolicyDecision
 
@@ -62,6 +63,27 @@ class FlyCNSPlayerTest(unittest.TestCase):
         self.assertEqual(player.illegal_action_count, 0)
         for before, after in zip(original, player.policy.actor_critic.parameters(), strict=True):
             torch.testing.assert_close(before, after, rtol=0, atol=0)
+
+    def test_appends_matchups_for_a_matchup_checkpoint(self) -> None:
+        checkpoint = Path(self.directory.name) / "matchup.pt"
+        FlyCNSMatchupActorCritic().save_weights(checkpoint)
+        player = FlyCNSPlayer(checkpoint, battle_format=DEFAULT_BATTLE_FORMAT, start_listening=False)
+        observation = np.zeros(OBSERVATION_DIM, dtype=np.float32)
+        matchups = np.ones(MATCHUP_FEATURES, dtype=np.float32)
+        mask = np.zeros(ACTION_COUNT, dtype=np.int8)
+        mask[7] = 1
+        with (
+            patch("flycns.player.embed_battle", return_value=observation),
+            patch("flycns.player.embed_matchups", return_value=matchups),
+            patch.object(SinglesEnv, "get_action_mask", return_value=mask),
+            patch.object(SinglesEnv, "action_to_order"),
+            patch.object(
+                player.policy, "predict", return_value=PolicyDecision(7, 0.0, 0.0, tuple([0.0] * ACTION_COUNT))
+            ) as predict,
+        ):
+            player.choose_move(object())
+
+        np.testing.assert_array_equal(predict.call_args.args[0], np.concatenate([observation, matchups]))
 
     def test_rejects_illegal_policy_choice(self) -> None:
         player = FlyCNSPlayer(

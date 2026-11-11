@@ -11,7 +11,7 @@ from poke_env.environment import SinglesEnv
 from poke_env.player import Player
 from poke_env.player.battle_order import BattleOrder
 
-from encoding import embed_battle
+from encoding import OBSERVATION_DIM, embed_battle, embed_matchups
 from flycns.hybrid_actor_critic import load_actor_critic
 from flycns.ppo_policy import FlyCNSPPOPolicy
 
@@ -40,6 +40,8 @@ class FlyCNSPlayer(Player):
 
     def choose_move(self, battle: Battle) -> BattleOrder:
         observation = embed_battle(battle)
+        if self.policy.actor_critic.observation_size > OBSERVATION_DIM:
+            observation = np.concatenate([observation, embed_matchups(battle)])
         action_mask = np.asarray(SinglesEnv.get_action_mask(battle), dtype=np.int8)
         decision = self.policy.predict(
             observation, action_mask, deterministic=self.deterministic
