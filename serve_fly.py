@@ -1,4 +1,4 @@
-"""Local, read-only HTTP API for the Fly CNS debug inference pipeline."""
+"""Read-only HTTP API for the Fly CNS debug pipeline and the trained battle policy."""
 
 from __future__ import annotations
 
@@ -12,11 +12,30 @@ from pydantic import BaseModel, Field
 from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT, DescendingActionDecoder
 from flycns.graph import FlyGraph
+from flycns.player import decide, load_frozen_policy
+from flycns.protocol_replay import order_to_choice, replay_battle
 from flycns.stimulation import BattleSensoryAdapter, FlySpikeSimulator
 
 
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.2.0"
 DEFAULT_GRAPH_PATH = Path(__file__).resolve().parent / "artifacts/fly_connectome.npz"
+# Copy of models/flycns_matchup_20261110_2049/matchup/seed_17_from1000/battle_1000.pt.
+DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent / "deploy/fly_matchup.pt"
+MAX_PROTOCOL_LINES = 20_000
+
+
+class ChooseRequest(BaseModel):
+    format: str = Field(default="gen9randombattle", pattern=r"^gen9[a-z0-9]+$")
+    protocol: list[str] = Field(min_length=1, max_length=MAX_PROTOCOL_LINES)
+    # Clients whose rules forbid mega, z-move, dynamax and tera choices set this to false.
+    gimmicks: bool = True
+
+
+class ChooseResponse(BaseModel):
+    choice: str
+    action_index: int
+    turn: int
+    state_value: float
 
 
 class PredictRequest(BaseModel):
@@ -49,6 +68,7 @@ class HealthResponse(BaseModel):
     status: str
     neuron_count: int
     version: str
+    model: str
 
 
 class FlyInferenceService:
@@ -120,12 +140,38 @@ class FlyInferenceService:
         }
 
 
-def create_app(graph_path: str | Path = DEFAULT_GRAPH_PATH) -> FastAPI:
+class FlyChoiceService:
+    """Choose a Showdown action for the player whose protocol stream is replayed."""
+
+    def __init__(self, checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH) -> None:
+        self.checkpoint_path = checkpoint_path
+        self.policy = load_frozen_policy(checkpoint_path)
+
+    def choose(
+        self, protocol: list[str], battle_format: str, *, allow_gimmicks: bool = True
+    ) -> dict[str, Any]:
+        battle, request = replay_battle(protocol, battle_format)
+        if request.get("wait") or request.get("teamPreview"):
+            raise ValueError("the last request does not ask for a move or switch")
+        order, decision = decide(self.policy, battle, allow_gimmicks=allow_gimmicks)
+        return {
+            "choice": order_to_choice(order, battle, request),
+            "action_index": decision.selected_action_index,
+            "turn": battle.turn,
+            "state_value": decision.state_value,
+        }
+
+
+def create_app(
+    graph_path: str | Path = DEFAULT_GRAPH_PATH,
+    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH,
+) -> FastAPI:
     service = FlyInferenceService(graph_path)
+    chooser = FlyChoiceService(checkpoint_path)
     application = FastAPI(
-        title="Fly CNS Debug Inference",
+        title="Fly CNS Inference",
         version=SERVICE_VERSION,
-        description="Read-only local access to the fixed Fly CNS debug pipeline.",
+        description="Read-only access to the Fly CNS debug pipeline and battle policy.",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -137,7 +183,17 @@ def create_app(graph_path: str | Path = DEFAULT_GRAPH_PATH) -> FastAPI:
             "status": "ok",
             "neuron_count": len(service.graph.neurons),
             "version": SERVICE_VERSION,
+            "model": chooser.checkpoint_path.name,
         }
+
+    @application.post("/v1/choose", response_model=ChooseResponse)
+    def choose(request: ChooseRequest) -> dict[str, Any]:
+        try:
+            return chooser.choose(
+                request.protocol, request.format, allow_gimmicks=request.gimmicks
+            )
+        except (ValueError, KeyError, IndexError, RuntimeError) as error:
+            raise HTTPException(status_code=422, detail=f"Cannot choose: {error}") from error
 
     @application.post("/predict", response_model=PredictResponse)
     def predict(request: PredictRequest) -> dict[str, Any]:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -8,6 +10,9 @@ import numpy as np
 from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
 from serve_fly import app
+
+
+REPLAY = json.loads((Path(__file__).parent / "fixtures/replay_battle.json").read_text(encoding="utf-8"))
 
 
 class FlyAPITest(unittest.IsolatedAsyncioTestCase):
@@ -23,11 +28,57 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/health")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual({route.path for route in app.routes}, {"/health", "/predict"})
+        self.assertEqual({route.path for route in app.routes}, {"/health", "/predict", "/v1/choose"})
         self.assertEqual(
             response.json(),
-            {"status": "ok", "neuron_count": 4274, "version": "0.1.0"},
+            {"status": "ok", "neuron_count": 4274, "version": "0.2.0", "model": "fly_matchup.pt"},
         )
+
+    async def test_choose_replays_the_protocol_and_returns_a_showdown_choice(self) -> None:
+        decision = REPLAY["decisions"][2]
+
+        response = await self.client.post(
+            "/v1/choose",
+            json={"format": REPLAY["format"], "protocol": REPLAY["protocol"][: decision["prefix"]]},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["choice"], decision["choice"])
+        self.assertEqual(set(payload), {"choice", "action_index", "turn", "state_value"})
+
+    async def test_choose_without_gimmicks_picks_a_plain_move_or_switch(self) -> None:
+        decision = REPLAY["decisions"][2]
+        self.assertEqual(decision["choice"], "move 2 terastallize")
+
+        response = await self.client.post(
+            "/v1/choose",
+            json={
+                "format": REPLAY["format"],
+                "protocol": REPLAY["protocol"][: decision["prefix"]],
+                "gimmicks": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertRegex(response.json()["choice"], r"^(move [1-4]|switch [1-6])$")
+        self.assertLess(response.json()["action_index"], 10)
+
+    async def test_choose_rejects_unusable_requests(self) -> None:
+        protocol = REPLAY["protocol"][: REPLAY["decisions"][0]["prefix"]]
+        cases = {
+            "no request": [line for line in protocol if not line.startswith("|request|")],
+            "wait": [*protocol, '|request|{"wait":true,"side":{"id":"p1","name":"Recorder 1","pokemon":[]}}'],
+            "format": protocol,
+        }
+        for name, lines in cases.items():
+            with self.subTest(name):
+                battle_format = "gen8randombattle" if name == "format" else REPLAY["format"]
+                response = await self.client.post(
+                    "/v1/choose", json={"format": battle_format, "protocol": lines}
+                )
+
+                self.assertEqual(response.status_code, 422, response.text)
 
     async def test_predict_returns_scores_and_never_selects_an_illegal_action(self) -> None:
         observation = np.linspace(-0.8, 1.0, OBSERVATION_DIM).tolist()

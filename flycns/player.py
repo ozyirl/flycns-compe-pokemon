@@ -27,8 +27,16 @@ def load_frozen_policy(checkpoint_path: Path) -> FlyCNSPPOPolicy:
     return FlyCNSPPOPolicy(actor_critic=actor_critic)
 
 
+# Actions 0-5 switch and 6-9 use a move; the rest add a mega, z-move, dynamax or tera.
+FIRST_GIMMICK_ACTION = 10
+
+
 def decide(
-    policy: FlyCNSPPOPolicy, battle: Battle, *, deterministic: bool = True
+    policy: FlyCNSPPOPolicy,
+    battle: Battle,
+    *,
+    deterministic: bool = True,
+    allow_gimmicks: bool = True,
 ) -> tuple[BattleOrder, PolicyDecision]:
     """Encode ``battle`` the way training did and convert the policy's choice to an order."""
 
@@ -36,6 +44,8 @@ def decide(
     if policy.actor_critic.observation_size > OBSERVATION_DIM:
         observation = np.concatenate([observation, embed_matchups(battle)])
     action_mask = np.asarray(SinglesEnv.get_action_mask(battle), dtype=np.int8)
+    if not allow_gimmicks:
+        action_mask[FIRST_GIMMICK_ACTION:] = 0
     decision = policy.predict(observation, action_mask, deterministic=deterministic)
     action = decision.selected_action_index
     if not 0 <= action < action_mask.size or action_mask[action] != 1:
