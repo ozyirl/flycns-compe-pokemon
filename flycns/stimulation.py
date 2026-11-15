@@ -65,6 +65,9 @@ class FlySpikeReport:
     central_indices: np.ndarray
     descending_indices: np.ndarray
     graph: FlyGraph
+    # Step at which each neuron first fired (-1 if it never did), and spikes per step.
+    first_spike_steps: np.ndarray | None = None
+    spikes_per_step: np.ndarray | None = None
 
     @property
     def sensory_neurons_stimulated(self) -> int:
@@ -150,12 +153,14 @@ class FlySpikeSimulator:
         recurrent = np.zeros(neuron_count, dtype=np.float32)
         previous_spikes = np.zeros(neuron_count, dtype=np.float32)
         spike_counts = np.zeros(neuron_count, dtype=np.int32)
+        first_spike_steps = np.full(neuron_count, -1, dtype=np.int32)
+        spikes_per_step = np.zeros(self.steps, dtype=np.int32)
         sensory_drive = np.zeros(neuron_count, dtype=np.float32)
         sensory_drive[self.sensory_indices] = (
             np.clip(stimulation, 0.0, 1.0) * self.sensory_gain
         )
 
-        for _ in range(self.steps):
+        for step in range(self.steps):
             recurrent.fill(0.0)
             if np.any(previous_spikes):
                 edge_drive = (
@@ -168,6 +173,8 @@ class FlySpikeSimulator:
             membrane = self.membrane_decay * membrane + sensory_drive + recurrent
             fired = membrane >= self.threshold
             spike_counts += fired
+            first_spike_steps[fired & (first_spike_steps < 0)] = step
+            spikes_per_step[step] = np.count_nonzero(fired)
             membrane[fired] -= self.threshold
             membrane = np.maximum(membrane, -self.threshold)
             previous_spikes = fired.astype(np.float32)
@@ -179,4 +186,6 @@ class FlySpikeSimulator:
             central_indices=self.central_indices.copy(),
             descending_indices=self.descending_indices.copy(),
             graph=self.graph,
+            first_spike_steps=first_spike_steps,
+            spikes_per_step=spikes_per_step,
         )

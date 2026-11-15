@@ -58,6 +58,16 @@ class FlyStimulationTest(unittest.TestCase):
         self.assertEqual(report.active_descending_neurons, 1)
         self.assertEqual(report.top_descending(1)[0].cell_type, "DN-test")
         self.assertGreater(report.top_descending(1)[0].spikes, 0)
+        # The timing record agrees with the spike counts: every neuron that fired has a
+        # first-spike step, and the per-step totals add up to all spikes.
+        self.assertEqual(report.spikes_per_step.shape, (8,))
+        self.assertEqual(int(report.spikes_per_step.sum()), report.total_cns_spikes)
+        np.testing.assert_array_equal(report.first_spike_steps >= 0, report.spike_counts > 0)
+        # Sensory cells are driven directly, so they fire before the cells downstream.
+        self.assertLess(
+            report.first_spike_steps[report.sensory_indices].max(),
+            report.first_spike_steps[report.descending_indices].max(),
+        )
 
 
 class DescendingActionDecoderTest(unittest.TestCase):
