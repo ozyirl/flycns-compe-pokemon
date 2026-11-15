@@ -1,0 +1,9 @@
+# Only what the Dockerfile copies; the virtualenv, models and connectome CSVs stay out.
+*
+!requirements.txt
+!encoding.py
+!serve_fly.py
+!flycns/
+!artifacts/fly_connectome.npz
+!deploy/fly_matchup.pt
+**/__pycache__
