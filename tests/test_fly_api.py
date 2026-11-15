@@ -31,7 +31,7 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({route.path for route in app.routes}, {"/health", "/predict", "/v1/choose"})
         self.assertEqual(
             response.json(),
-            {"status": "ok", "neuron_count": 4274, "version": "0.2.0", "model": "fly_matchup.pt"},
+            {"status": "ok", "neuron_count": 4274, "version": "0.3.0", "model": "fly_matchup.pt"},
         )
 
     async def test_choose_replays_the_protocol_and_returns_a_showdown_choice(self) -> None:
@@ -45,7 +45,37 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual(payload["choice"], decision["choice"])
-        self.assertEqual(set(payload), {"choice", "action_index", "turn", "state_value"})
+        self.assertEqual(
+            set(payload), {"choice", "action_index", "turn", "state_value", "diagnostics"}
+        )
+
+    async def test_choose_describes_the_brain_activity_behind_the_choice(self) -> None:
+        decision = REPLAY["decisions"][9]
+
+        response = await self.client.post(
+            "/v1/choose",
+            json={"format": REPLAY["format"], "protocol": REPLAY["protocol"][: decision["prefix"]]},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        diagnostics = payload["diagnostics"]
+        self.assertLess(len(json.dumps(diagnostics)), 5000)
+        self.assertEqual(
+            [population["key"] for population in diagnostics["populations"]],
+            ["sensory", "kenyon", "modulatory", "central", "descending"],
+        )
+        self.assertEqual(
+            sum(population["spikes"] for population in diagnostics["populations"]),
+            diagnostics["total_spikes"],
+        )
+        self.assertEqual(sum(diagnostics["spikes_per_step"]), diagnostics["total_spikes"])
+        self.assertLessEqual(len(diagnostics["top_descending"]), 8)
+        actions = diagnostics["actions"]
+        self.assertAlmostEqual(sum(action["probability"] for action in actions), 1.0, places=2)
+        self.assertEqual([action["choice"] for action in actions if action["selected"]], [payload["choice"]])
+        self.assertEqual(actions[0]["choice"], payload["choice"])
+        self.assertEqual(diagnostics["state_value"], payload["state_value"])
 
     async def test_choose_without_gimmicks_picks_a_plain_move_or_switch(self) -> None:
         decision = REPLAY["decisions"][2]

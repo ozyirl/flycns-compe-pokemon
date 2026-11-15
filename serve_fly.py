@@ -11,13 +11,14 @@ from pydantic import BaseModel, Field
 
 from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT, DescendingActionDecoder
+from flycns.brain_diagnostics import summarize_decision
 from flycns.graph import FlyGraph
-from flycns.player import decide, load_frozen_policy
+from flycns.player import decide_with_report, load_frozen_policy
 from flycns.protocol_replay import order_to_choice, replay_battle
 from flycns.stimulation import BattleSensoryAdapter, FlySpikeSimulator
 
 
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.3.0"
 DEFAULT_GRAPH_PATH = Path(__file__).resolve().parent / "artifacts/fly_connectome.npz"
 # Copy of models/flycns_matchup_20261110_2049/matchup/seed_17_from1000/battle_1000.pt.
 DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent / "deploy/fly_matchup.pt"
@@ -31,13 +32,6 @@ class ChooseRequest(BaseModel):
     gimmicks: bool = True
 
 
-class ChooseResponse(BaseModel):
-    choice: str
-    action_index: int
-    turn: int
-    state_value: float
-
-
 class PredictRequest(BaseModel):
     observation: list[float] = Field(min_length=OBSERVATION_DIM, max_length=OBSERVATION_DIM)
     action_mask: list[int] = Field(min_length=ACTION_COUNT, max_length=ACTION_COUNT)
@@ -47,6 +41,45 @@ class TopDescendingNeuron(BaseModel):
     root_id: int
     cell_type: str
     spikes: int
+
+
+class BrainPopulation(BaseModel):
+    key: str
+    label: str
+    neurons: int
+    active: int
+    spikes: int
+    # Simulation step (of ``BrainDiagnostics.steps``) at which the population first fired.
+    first_spike_step: int | None
+
+
+class ActionProbability(BaseModel):
+    index: int
+    choice: str
+    label: str
+    probability: float
+    selected: bool
+
+
+class BrainDiagnostics(BaseModel):
+    total_spikes: int
+    active_neurons: int
+    neuron_count: int
+    sensory_neurons_stimulated: int
+    steps: int | None
+    spikes_per_step: list[int]
+    populations: list[BrainPopulation]
+    top_descending: list[TopDescendingNeuron]
+    actions: list[ActionProbability]
+    state_value: float
+
+
+class ChooseResponse(BaseModel):
+    choice: str
+    action_index: int
+    turn: int
+    state_value: float
+    diagnostics: BrainDiagnostics
 
 
 class CNSDiagnostics(BaseModel):
@@ -153,12 +186,15 @@ class FlyChoiceService:
         battle, request = replay_battle(protocol, battle_format)
         if request.get("wait") or request.get("teamPreview"):
             raise ValueError("the last request does not ask for a move or switch")
-        order, decision = decide(self.policy, battle, allow_gimmicks=allow_gimmicks)
+        order, decision, report = decide_with_report(
+            self.policy, battle, allow_gimmicks=allow_gimmicks
+        )
         return {
             "choice": order_to_choice(order, battle, request),
             "action_index": decision.selected_action_index,
             "turn": battle.turn,
             "state_value": decision.state_value,
+            "diagnostics": summarize_decision(report, decision, battle, request),
         }
 
 
