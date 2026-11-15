@@ -209,6 +209,20 @@ app = create_app()
 
 
 if __name__ == "__main__":
+    import os
+    import socket
+
     import uvicorn
 
-    uvicorn.run("serve_fly:app", host="127.0.0.1", port=8000, reload=False)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    if host == "::":
+        # asyncio binds "::" as IPv6-only. Railway's private network uses IPv6 and
+        # Docker's port forwarding uses IPv4, so listen on both.
+        listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("::", port))
+        uvicorn.Server(uvicorn.Config(app)).run(sockets=[listener])
+    else:
+        uvicorn.run("serve_fly:app", host=host, port=port, reload=False)
