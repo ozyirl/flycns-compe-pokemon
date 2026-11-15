@@ -15,7 +15,7 @@ from flycns.action_decoder import ACTION_COUNT
 from flycns.actor_critic import FlyCNSActorCritic
 from flycns.graph import FlyGraph
 from flycns.hybrid_actor_critic import FlyCNSHybridActorCritic
-from flycns.stimulation import BattleSensoryAdapter, FlySpikeSimulator
+from flycns.stimulation import BattleSensoryAdapter, FlySpikeReport, FlySpikeSimulator
 
 
 DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "artifacts/fly_connectome.npz"
@@ -87,9 +87,11 @@ class FlyCNSPPOPolicy:
             )
         return observations[..., :required]
 
+    def _simulate(self, observation: np.ndarray) -> FlySpikeReport:
+        return self.simulator.run(self.adapter.adapt(observation[:OBSERVATION_DIM]))
+
     def _descending_activity(self, observation: np.ndarray) -> np.ndarray:
-        stimulation = self.adapter.adapt(observation[:OBSERVATION_DIM])
-        report = self.simulator.run(stimulation)
+        report = self._simulate(observation)
         return report.spike_counts[report.descending_indices].astype(np.float32)
 
     def predict(
@@ -99,9 +101,21 @@ class FlyCNSPPOPolicy:
         *,
         deterministic: bool = True,
     ) -> PolicyDecision:
+        return self.predict_with_report(observation, action_mask, deterministic=deterministic)[0]
+
+    def predict_with_report(
+        self,
+        observation: Sequence[float] | np.ndarray,
+        action_mask: Sequence[int] | np.ndarray,
+        *,
+        deterministic: bool = True,
+    ) -> tuple[PolicyDecision, FlySpikeReport]:
+        """Like :meth:`predict`, also returning the spike simulation the decision read."""
+
         mask = self._validated_masks(action_mask, (ACTION_COUNT,))
         observation_array = self._model_observations(np.asarray(observation, dtype=np.float32))
-        descending = self._descending_activity(observation_array)
+        report = self._simulate(observation_array)
+        descending = report.spike_counts[report.descending_indices].astype(np.float32)
 
         parameter = next(self.actor_critic.parameters())
         activity = torch.from_numpy(descending).to(device=parameter.device, dtype=parameter.dtype)
@@ -114,12 +128,13 @@ class FlyCNSPPOPolicy:
             action = torch.argmax(masked_logits) if deterministic else distribution.sample()
             log_probability = distribution.log_prob(action)
 
-        return PolicyDecision(
+        decision = PolicyDecision(
             selected_action_index=int(action.item()),
             action_log_probability=float(log_probability.item()),
             state_value=float(value.item()),
             policy_logits=tuple(float(logit) for logit in masked_logits.cpu().tolist()),
         )
+        return decision, report
 
     def sample_action(
         self,

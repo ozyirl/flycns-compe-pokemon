@@ -14,6 +14,7 @@ from poke_env.player.battle_order import BattleOrder
 from encoding import OBSERVATION_DIM, embed_battle, embed_matchups
 from flycns.hybrid_actor_critic import load_actor_critic
 from flycns.ppo_policy import FlyCNSPPOPolicy, PolicyDecision
+from flycns.stimulation import FlySpikeReport
 
 
 def load_frozen_policy(checkpoint_path: Path) -> FlyCNSPPOPolicy:
@@ -31,6 +32,27 @@ def load_frozen_policy(checkpoint_path: Path) -> FlyCNSPPOPolicy:
 FIRST_GIMMICK_ACTION = 10
 
 
+def _policy_inputs(
+    policy: FlyCNSPPOPolicy, battle: Battle, allow_gimmicks: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode ``battle`` the way training did, with its legal-action mask."""
+
+    observation = embed_battle(battle)
+    if policy.actor_critic.observation_size > OBSERVATION_DIM:
+        observation = np.concatenate([observation, embed_matchups(battle)])
+    action_mask = np.asarray(SinglesEnv.get_action_mask(battle), dtype=np.int8)
+    if not allow_gimmicks:
+        action_mask[FIRST_GIMMICK_ACTION:] = 0
+    return observation, action_mask
+
+
+def _legal_order(decision: PolicyDecision, action_mask: np.ndarray, battle: Battle) -> BattleOrder:
+    action = decision.selected_action_index
+    if not 0 <= action < action_mask.size or action_mask[action] != 1:
+        raise ValueError(f"Fly CNS selected illegal action {action}")
+    return SinglesEnv.action_to_order(np.int64(action), battle, strict=True)
+
+
 def decide(
     policy: FlyCNSPPOPolicy,
     battle: Battle,
@@ -40,17 +62,25 @@ def decide(
 ) -> tuple[BattleOrder, PolicyDecision]:
     """Encode ``battle`` the way training did and convert the policy's choice to an order."""
 
-    observation = embed_battle(battle)
-    if policy.actor_critic.observation_size > OBSERVATION_DIM:
-        observation = np.concatenate([observation, embed_matchups(battle)])
-    action_mask = np.asarray(SinglesEnv.get_action_mask(battle), dtype=np.int8)
-    if not allow_gimmicks:
-        action_mask[FIRST_GIMMICK_ACTION:] = 0
+    observation, action_mask = _policy_inputs(policy, battle, allow_gimmicks)
     decision = policy.predict(observation, action_mask, deterministic=deterministic)
-    action = decision.selected_action_index
-    if not 0 <= action < action_mask.size or action_mask[action] != 1:
-        raise ValueError(f"Fly CNS selected illegal action {action}")
-    return SinglesEnv.action_to_order(np.int64(action), battle, strict=True), decision
+    return _legal_order(decision, action_mask, battle), decision
+
+
+def decide_with_report(
+    policy: FlyCNSPPOPolicy,
+    battle: Battle,
+    *,
+    deterministic: bool = True,
+    allow_gimmicks: bool = True,
+) -> tuple[BattleOrder, PolicyDecision, FlySpikeReport]:
+    """Like :func:`decide`, also returning the spike simulation the decision read."""
+
+    observation, action_mask = _policy_inputs(policy, battle, allow_gimmicks)
+    decision, report = policy.predict_with_report(
+        observation, action_mask, deterministic=deterministic
+    )
+    return _legal_order(decision, action_mask, battle), decision, report
 
 
 class FlyCNSPlayer(Player):
