@@ -13,5 +13,7 @@ neurons.csv.gz
 models/
 logs/
 artifacts/*.npz
+# The built graph is small and the deployed service loads it.
+!artifacts/fly_connectome.npz
 artifacts/*.json.gz
 telemetry/
