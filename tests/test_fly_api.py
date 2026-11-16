@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 from pathlib import Path
@@ -9,10 +10,13 @@ import numpy as np
 
 from encoding import OBSERVATION_DIM
 from flycns.action_decoder import ACTION_COUNT
-from serve_fly import app
+from flycns.brain_diagnostics import graph_fingerprint
+from flycns.graph import FlyGraph
+from serve_fly import DEFAULT_GRAPH_PATH, app
 
 
 REPLAY = json.loads((Path(__file__).parent / "fixtures/replay_battle.json").read_text(encoding="utf-8"))
+GRAPH = FlyGraph.load(DEFAULT_GRAPH_PATH)
 
 
 class FlyAPITest(unittest.IsolatedAsyncioTestCase):
@@ -31,7 +35,7 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({route.path for route in app.routes}, {"/health", "/predict", "/v1/choose"})
         self.assertEqual(
             response.json(),
-            {"status": "ok", "neuron_count": 4274, "version": "0.3.0", "model": "fly_matchup.pt"},
+            {"status": "ok", "neuron_count": 4274, "version": "0.4.0", "model": "fly_matchup.pt"},
         )
 
     async def test_choose_replays_the_protocol_and_returns_a_showdown_choice(self) -> None:
@@ -60,7 +64,8 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         diagnostics = payload["diagnostics"]
-        self.assertLess(len(json.dumps(diagnostics)), 5000)
+        # Two bytes per neuron, base64-encoded, plus the summary.
+        self.assertLess(len(json.dumps(diagnostics)), 16_000)
         self.assertEqual(
             [population["key"] for population in diagnostics["populations"]],
             ["sensory", "kenyon", "modulatory", "central", "descending"],
@@ -76,6 +81,16 @@ class FlyAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([action["choice"] for action in actions if action["selected"]], [payload["choice"]])
         self.assertEqual(actions[0]["choice"], payload["choice"])
         self.assertEqual(diagnostics["state_value"], payload["state_value"])
+
+        activity = diagnostics["neuron_activity"]
+        first = np.frombuffer(base64.b64decode(activity["first_spike_step"]), dtype=np.uint8)
+        spikes = np.frombuffer(base64.b64decode(activity["spikes"]), dtype=np.uint8)
+        self.assertEqual(first.size, diagnostics["neuron_count"])
+        self.assertEqual(int(spikes.sum()), diagnostics["total_spikes"])
+        np.testing.assert_array_equal(first != 255, spikes > 0)
+        self.assertEqual(int(np.count_nonzero(spikes)), diagnostics["active_neurons"])
+        self.assertLess(int(first[first != 255].max()), diagnostics["steps"])
+        self.assertEqual(activity["graph"], graph_fingerprint([neuron.root_id for neuron in GRAPH.neurons]))
 
     async def test_choose_without_gimmicks_picks_a_plain_move_or_switch(self) -> None:
         decision = REPLAY["decisions"][2]

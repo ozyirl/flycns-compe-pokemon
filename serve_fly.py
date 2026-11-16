@@ -18,7 +18,7 @@ from flycns.protocol_replay import order_to_choice, replay_battle
 from flycns.stimulation import BattleSensoryAdapter, FlySpikeSimulator
 
 
-SERVICE_VERSION = "0.3.0"
+SERVICE_VERSION = "0.4.0"
 DEFAULT_GRAPH_PATH = Path(__file__).resolve().parent / "artifacts/fly_connectome.npz"
 # Copy of models/flycns_matchup_20261110_2049/matchup/seed_17_from1000/battle_1000.pt.
 DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent / "deploy/fly_matchup.pt"
@@ -61,6 +61,15 @@ class ActionProbability(BaseModel):
     selected: bool
 
 
+class NeuronActivity(BaseModel):
+    # Fingerprint of the neuron order; a brain layout built for the same graph matches it.
+    graph: str
+    # Base64 bytes, one per neuron in graph order: first spike step (255 if it never
+    # fired) and spike count.
+    first_spike_step: str
+    spikes: str
+
+
 class BrainDiagnostics(BaseModel):
     total_spikes: int
     active_neurons: int
@@ -72,6 +81,7 @@ class BrainDiagnostics(BaseModel):
     top_descending: list[TopDescendingNeuron]
     actions: list[ActionProbability]
     state_value: float
+    neuron_activity: NeuronActivity | None
 
 
 class ChooseResponse(BaseModel):

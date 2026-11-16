@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -21,6 +24,33 @@ POPULATION_LABELS = {
     "descending": "descending",
 }
 TOP_DESCENDING_LIMIT = 8
+# Per-neuron bytes use 255 for "never fired"; spike counts cannot reach it in 32 steps.
+NEVER_FIRED = 255
+
+
+def graph_fingerprint(root_ids: Sequence[int]) -> str:
+    """Identify a neuron ordering, so per-neuron arrays and layouts can be matched."""
+
+    return hashlib.sha256(np.asarray(root_ids, dtype="<i8").tobytes()).hexdigest()[:16]
+
+
+def encode_bytes(values: np.ndarray) -> str:
+    """Base64 of ``values`` as unsigned bytes, the compact form the frontend decodes."""
+
+    return base64.b64encode(np.asarray(values, dtype=np.uint8).tobytes()).decode("ascii")
+
+
+def neuron_activity(report: FlySpikeReport) -> dict[str, Any] | None:
+    """Each neuron's first spike step and spike count, in graph order."""
+
+    if report.first_spike_steps is None:
+        return None
+    first = np.where(report.first_spike_steps >= 0, report.first_spike_steps, NEVER_FIRED)
+    return {
+        "graph": graph_fingerprint([neuron.root_id for neuron in report.graph.neurons]),
+        "first_spike_step": encode_bytes(first),
+        "spikes": encode_bytes(np.minimum(report.spike_counts, NEVER_FIRED - 1)),
+    }
 
 
 def choice_label(choice: str, request: dict[str, Any]) -> str:
@@ -91,4 +121,5 @@ def summarize_decision(
         ],
         "actions": actions,
         "state_value": decision.state_value,
+        "neuron_activity": neuron_activity(report),
     }
